@@ -19,4 +19,5 @@ Issue 与 spec 存放在本仓库的 GitHub Issues（`mel0nyrame/openchamber-con
 - 改 `src/` 后跑 `bun run build`，把三个构建产物一起提交；扩展安装时不执行构建。理由见 `docs/adr/0004-build-artifacts-committed.md`。
 - 交付前 `bun test` 与 `bun run typecheck` 通过。
 - 面板的几何、取整、配色与刷新策略放纯函数模块（`src/panel/map.ts`、`palette.ts`、`refresh.ts`）并单测；主题用 `data-oc-theme` 选择器切换，不读系统偏好。
+- 失败状态按来源分层：host 失败、Collector 不可用、单次请求失败各有独立状态与文案，不要合并成一句通用错误。理由见 `docs/adr/0008-degradation-layers.md`。
 - OpenCode V2 插件接口与已核实的事实见 `docs/opencode-plugin.md`。
