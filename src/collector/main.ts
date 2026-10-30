@@ -2,8 +2,12 @@ import { randomBytes } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
 
 import { removeDiscovery, resolveDiscoveryDir, writeDiscovery } from "../shared/discovery.ts";
-import type { DiscoveryRecord } from "../shared/types.ts";
+import type { DiscoveryRecord, SnapshotItemDetail } from "../shared/types.ts";
 import { COLLECTOR_VERSION } from "../shared/version.ts";
+import { enrichSnapshot, WindowResolver } from "./enrich.ts";
+import type { PluginContext, SessionContext } from "./opencode.ts";
+import { buildDraft } from "./snapshot.ts";
+import { SnapshotStore } from "./store.ts";
 
 interface CollectorPlugin {
   id: string;
@@ -43,10 +47,23 @@ function close(server: Server): Promise<void> {
 const collector: CollectorPlugin = {
   id: "context-map-collector",
 
-  async setup(): Promise<() => Promise<void>> {
+  async setup(rawContext: unknown): Promise<() => Promise<void>> {
+    const context = (rawContext ?? {}) as PluginContext;
     const token = randomBytes(32).toString("hex");
+    const store = new SnapshotStore();
+    const windows = new WindowResolver(context);
+
+    const hook = context.session?.hook
+      ? await context.session.hook("context", (sessionContext: SessionContext) => {
+          // 请求路径上只做同步计数、切片和内存写入；异步补齐放到 hook 之外。
+          const record = store.add(buildDraft(sessionContext, new Date().toISOString()));
+          void enrichSnapshot(context, store, windows, record).catch(() => {});
+        })
+      : null;
+
     const server = createServer((request, response) => {
-      const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      const path = url.pathname;
 
       if (request.method === "GET" && path === "/health") {
         sendJson(response, 200, { ok: true, version: COLLECTOR_VERSION });
@@ -58,14 +75,55 @@ const collector: CollectorPlugin = {
           sendJson(response, 401, { error: "unauthorized" });
           return;
         }
-        sendJson(response, 404, { error: "not_found" });
+
+        const sessionID = url.searchParams.get("sessionID");
+        if (!sessionID) {
+          sendJson(response, 400, { error: "bad_request" });
+          return;
+        }
+
+        const itemId = path === "/item" ? url.searchParams.get("itemId") : null;
+        if (path === "/item" && !itemId) {
+          sendJson(response, 400, { error: "bad_request" });
+          return;
+        }
+
+        const record = store.get(sessionID);
+        if (!record) {
+          sendJson(response, 404, { error: "not_found" });
+          return;
+        }
+
+        if (path === "/summary") {
+          sendJson(response, 200, record.summary);
+          return;
+        }
+
+        const item = record.draft.items.find((candidate) => candidate.id === itemId);
+        if (!item) {
+          sendJson(response, 404, { error: "not_found" });
+          return;
+        }
+        const detail: SnapshotItemDetail = {
+          id: item.id,
+          title: item.title,
+          chars: item.chars,
+          text: item.text,
+        };
+        sendJson(response, 200, detail);
         return;
       }
 
       sendJson(response, 404, { error: "not_found" });
     });
 
-    const port = await listen(server);
+    let port: number;
+    try {
+      port = await listen(server);
+    } catch (error) {
+      await hook?.dispose();
+      throw error;
+    }
     const record: DiscoveryRecord = {
       version: COLLECTOR_VERSION,
       port,
@@ -78,15 +136,20 @@ const collector: CollectorPlugin = {
     try {
       discoveryFile = await writeDiscovery(resolveDiscoveryDir(), record);
     } catch (error) {
+      await hook?.dispose();
       await close(server);
       throw error;
     }
 
     return async () => {
       try {
-        await close(server);
+        await hook?.dispose();
       } finally {
-        await removeDiscovery(discoveryFile);
+        try {
+          await close(server);
+        } finally {
+          await removeDiscovery(discoveryFile);
+        }
       }
     };
   },

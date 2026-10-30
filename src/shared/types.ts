@@ -34,10 +34,20 @@ export interface SnapshotSummary {
   model: string;
   used: number;
   window: number;
+  /** 窗口不是来自模型信息，而是按默认值估算。 */
+  windowAssumed: boolean;
   estimated: boolean;
   collectedAt: string;
   categories: CategoryUsage[];
   items: ItemSummary[];
+}
+
+/** /item 返回的单条完整预览。 */
+export interface SnapshotItemDetail {
+  id: string;
+  title: string;
+  chars: number;
+  text: string;
 }
 
 /** Collector 写入 discovery 文件的记录。 */
