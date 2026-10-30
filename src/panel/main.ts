@@ -23,6 +23,7 @@ import {
   MAP_COLUMNS,
   buildBreakdown,
   categoryOfItem,
+  fitDenominator,
   gradientStops,
   itemsForCategory,
   layoutMap,
@@ -57,6 +58,8 @@ import {
 const STYLE = `
   html, body { margin: 0; background: transparent; color: var(--oc-fg); font: 12px/1.4 var(--oc-font); }
   * { box-sizing: border-box; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   html, body { height: 100%; overflow-y: auto; overflow-x: hidden; }
   #root { display: flex; flex-direction: column; gap: 14px; padding: 12px 12px 20px; }
   .head { display: flex; flex-direction: column; gap: 2px; }
@@ -69,14 +72,18 @@ const STYLE = `
     background: color-mix(in srgb, var(--oc-fg) 4%, transparent); }
   .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-height: 18px; }
   .card-title { flex: none; font-weight: 600; }
-  .map-hint { min-width: 0; max-width: 58%; color: var(--oc-muted); font-size: 11px; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
+  .zoom { appearance: none; -webkit-appearance: none; flex: none; padding: 2px 7px;
+    border: 1px solid var(--oc-border); border-radius: 5px; background: transparent;
+    color: var(--oc-muted); font: inherit; font-size: 10px; cursor: pointer; }
+  .zoom:hover { color: var(--oc-fg); background: color-mix(in srgb, var(--oc-fg) 7%, transparent); }
+  .zoom:focus-visible { outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: -2px; }
   .map-wrap { position: relative; }
   .map { display: grid; grid-template-columns: repeat(${MAP_COLUMNS}, minmax(0, 1fr)); gap: 2px; }
   .cell { appearance: none; -webkit-appearance: none; display: block; width: 100%; min-width: 0;
     aspect-ratio: 1; padding: 0; border: 0; border-radius: 2px; background: var(--oc-border);
     cursor: pointer; transition: opacity .12s ease; }
   .cell:hover { outline: 1px solid var(--oc-fg); outline-offset: 1px; }
+  .cell.free { background: transparent; box-shadow: inset 0 0 0 1px var(--oc-border); }
   .cell.is-active { outline: 2px solid var(--oc-fg); outline-offset: 1px; }
   .cell.is-dim { opacity: .32; }
   .map-tip { position: absolute; z-index: 3; left: 0; top: 0; max-width: 100%; padding: 6px 8px;
@@ -87,15 +94,11 @@ const STYLE = `
   .tip-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
   .tip-row + .tip-row { margin-top: 2px; }
   .tip-tokens { margin-left: auto; color: var(--oc-muted); font-variant-numeric: tabular-nums; }
-  .map-empty { padding: 12px 4px; color: var(--oc-muted); font-size: 11px; }
-  .window-track { height: 5px; border-radius: 3px; overflow: hidden;
-    background: color-mix(in srgb, var(--oc-fg) 12%, transparent); }
-  .window-used { height: 100%; width: 0; border-radius: 3px; background: var(--oc-primary);
-    transition: width .2s ease; }
-  .window-used[data-over="true"] { background: var(--oc-error); }
-  .window-caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px;
+  .map-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
     color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-  .window-caption .is-over { color: var(--oc-fg); font-weight: 600; }
+  .legend-item { display: inline-flex; align-items: center; gap: 5px; }
+  .legend-swatch { width: 8px; height: 8px; border-radius: 2px; background: var(--oc-primary); }
+  .legend-swatch.free { background: transparent; box-shadow: inset 0 0 0 1px var(--oc-border); }
   .breakdown-list { display: flex; flex-direction: column; gap: 1px; }
   .row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 8px;
     width: 100%; padding: 6px; border: 0; border-radius: 6px; background: transparent; color: inherit;
@@ -106,6 +109,7 @@ const STYLE = `
     outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: -2px; }
   .row-free { cursor: default; }
   .swatch { width: 8px; height: 8px; border-radius: 2px; }
+  .swatch.free { background: transparent; box-shadow: inset 0 0 0 1px var(--oc-border); }
   .row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-meta { color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums;
     white-space: nowrap; }
@@ -317,10 +321,15 @@ const mapTitle = document.createElement("div");
 mapTitle.className = "card-title";
 mapTitle.textContent = t(currentLocale, "mapTitle");
 const mapHint = document.createElement("div");
-mapHint.className = "map-hint";
+mapHint.className = "sr-only";
 mapHint.setAttribute("aria-live", "polite");
 mapHint.textContent = t(currentLocale, "mapHint");
-mapHead.append(mapTitle, mapHint);
+const zoomButton = document.createElement("button");
+zoomButton.type = "button";
+zoomButton.className = "zoom";
+zoomButton.title = t(currentLocale, "zoomTitle");
+zoomButton.addEventListener("click", () => toggleZoom());
+mapHead.append(mapTitle, zoomButton, mapHint);
 
 const mapWrap = document.createElement("div");
 mapWrap.className = "map-wrap";
@@ -332,28 +341,25 @@ const mapTip = document.createElement("div");
 mapTip.className = "map-tip";
 mapTip.setAttribute("role", "tooltip");
 mapTip.hidden = true;
-const mapEmpty = document.createElement("div");
-mapEmpty.className = "map-empty";
-mapEmpty.textContent = t(currentLocale, "waitingForFirstRequestDetail");
-mapEmpty.hidden = true;
-mapWrap.append(mapGrid, mapTip, mapEmpty);
+mapWrap.append(mapGrid, mapTip);
 
-const windowTrack = document.createElement("div");
-windowTrack.className = "window-track";
-windowTrack.setAttribute("role", "progressbar");
-windowTrack.setAttribute("aria-label", t(currentLocale, "usedLabel"));
-windowTrack.setAttribute("aria-valuemin", "0");
-windowTrack.setAttribute("aria-valuemax", "100");
-const windowUsedBar = document.createElement("div");
-windowUsedBar.className = "window-used";
-windowTrack.append(windowUsedBar);
-const windowCaption = document.createElement("div");
-windowCaption.className = "window-caption";
-const windowCaptionUsed = document.createElement("span");
-const windowCaptionFree = document.createElement("span");
-windowCaption.append(windowCaptionUsed, windowCaptionFree);
+const mapLegend = document.createElement("div");
+mapLegend.className = "map-legend";
+const freeLegend = document.createElement("span");
+freeLegend.className = "legend-item";
+const freeLegendSwatch = document.createElement("span");
+freeLegendSwatch.className = "legend-swatch free";
+const freeLegendText = document.createElement("span");
+freeLegend.append(freeLegendSwatch, freeLegendText);
+const usedLegend = document.createElement("span");
+usedLegend.className = "legend-item";
+const usedLegendSwatch = document.createElement("span");
+usedLegendSwatch.className = "legend-swatch";
+const usedLegendText = document.createElement("span");
+usedLegend.append(usedLegendSwatch, usedLegendText);
+mapLegend.append(freeLegend, usedLegend);
 
-mapCard.append(mapHead, mapWrap, windowTrack, windowCaption);
+mapCard.append(mapHead, mapWrap, mapLegend);
 
 const breakdownCard = document.createElement("section");
 breakdownCard.className = "card breakdown-card";
@@ -458,7 +464,11 @@ interface CellTarget {
   element: HTMLButtonElement;
 }
 
+type ZoomMode = "window" | "fit";
+
 let selectedCategory: Category | null = null;
+let zoom: ZoomMode = "window";
+let currentFreeTokens = 0;
 let mapSignature: string | null = null;
 let currentLayout: MapLayout | null = null;
 let cellElements = new Map<number, HTMLButtonElement>();
@@ -497,6 +507,23 @@ document.addEventListener("keydown", (event) => {
     hoveredCell = null;
     refreshTooltip();
     if (preview || selectedCategory) goBack();
+    return;
+  }
+
+  const zTarget = event.target;
+  const typing = zTarget instanceof HTMLElement
+    && (zTarget.isContentEditable || zTarget.tagName === "INPUT" || zTarget.tagName === "TEXTAREA"
+      || zTarget.tagName === "SELECT");
+  if (
+    !typing
+    && !event.defaultPrevented
+    && !event.metaKey
+    && !event.ctrlKey
+    && !event.altKey
+    && event.key.toLowerCase() === "z"
+  ) {
+    event.preventDefault();
+    toggleZoom();
     return;
   }
 
@@ -614,7 +641,7 @@ function renderStaticCopy(): void {
   mapTitle.textContent = t(currentLocale, "mapTitle");
   mapHint.textContent = t(currentLocale, "mapHint");
   mapGrid.setAttribute("aria-label", t(currentLocale, "mapAria"));
-  windowTrack.setAttribute("aria-label", t(currentLocale, "usedLabel"));
+  zoomButton.title = t(currentLocale, "zoomTitle");
   breakdownTitle.textContent = t(currentLocale, "breakdownTitle");
   backButton.textContent = t(currentLocale, "back");
   previewPanel.setAttribute("aria-label", t(currentLocale, "previewAria"));
@@ -796,9 +823,43 @@ function snapshotSignature(next: SnapshotSummary): string {
     next.collectedAt,
     next.used,
     next.window,
+    zoom,
     next.categories.map((entry) => `${entry.category}:${entry.items}:${entry.tokens}`).join(","),
     next.items.length,
   ].join("|");
+}
+
+function compactNumber(value: number): string {
+  const safe = Math.max(0, Math.round(value));
+  if (safe < 1000) return String(safe);
+  const scaled = safe / 1000;
+  const digits = scaled >= 10 ? 0 : 1;
+  return `${scaled.toFixed(digits).replace(/\.0$/, "")}k`;
+}
+
+function mapDenominator(next: SnapshotSummary): number {
+  const fit = Math.min(
+    next.window > 0 ? next.window : Number.POSITIVE_INFINITY,
+    fitDenominator(next.used),
+  );
+  return Math.max(1, zoom === "window" ? next.window : fit);
+}
+
+function renderZoomLabel(next: SnapshotSummary): void {
+  const value = compactNumber(zoom === "window" ? next.window : mapDenominator(next));
+  zoomButton.textContent = t(
+    currentLocale,
+    zoom === "window" ? "zoomWindow" : "zoomFit",
+    { value },
+  );
+  zoomButton.title = t(currentLocale, "zoomTitle");
+}
+
+function toggleZoom(): void {
+  zoom = zoom === "window" ? "fit" : "window";
+  if (!summary) return;
+  mapSignature = null;
+  renderSummary(summary);
 }
 
 function roundPercent(value: number): string {
@@ -827,41 +888,37 @@ function cellLabel(cell: MapCell): string {
 }
 
 function renderMap(next: SnapshotSummary): void {
-  const layout = layoutMap(next.categories);
+  renderZoomLabel(next);
+  const denominator = mapDenominator(next);
+  const layout = layoutMap(next.categories, denominator);
   currentLayout = layout;
-
-  const bar = windowBar(next.used, next.window);
-  windowUsedBar.style.width = `${bar.fraction * 100}%`;
-  windowUsedBar.dataset.over = bar.over ? "true" : "false";
-  windowTrack.setAttribute("aria-valuenow", String(Math.round(bar.fraction * 100)));
-  windowTrack.setAttribute("aria-valuetext", `${formatPercent(bar.fraction * 100)}%`);
-  windowCaptionUsed.textContent = t(currentLocale, "usedCaption", {
-    used: formatNumber(bar.used),
-    window: formatNumber(bar.window),
+  currentFreeTokens = Math.max(0, denominator - next.used);
+  freeLegendText.textContent = t(currentLocale, "freeLegend", {
+    value: compactNumber(currentFreeTokens),
   });
-  windowCaptionFree.textContent = bar.over
-    ? `${t(currentLocale, "freeCaption", { tokens: formatNumber(bar.free) })} · ${t(currentLocale, "overWindow")}`
-    : t(currentLocale, "freeCaption", { tokens: formatNumber(bar.free) });
-  windowCaptionFree.classList.toggle("is-over", bar.over);
+  usedLegendText.textContent = t(currentLocale, "usedLegend", {
+    value: compactNumber(next.used),
+  });
 
   hoveredCell = null;
   pinnedCell = null;
   hideTooltip();
   mapGrid.replaceChildren();
   cellElements = new Map();
-
-  const hasCells = layout.cells.length > 0;
-  mapGrid.hidden = !hasCells;
-  mapEmpty.hidden = hasCells;
   mapHint.textContent = t(currentLocale, "mapHint");
 
   for (const cell of layout.cells) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "cell";
+    button.className = cell.free ? "cell free" : "cell";
     button.tabIndex = -1;
-    button.style.background = cellBackground(cell);
-    button.setAttribute("aria-label", cellLabel(cell));
+    button.style.background = cell.free ? "" : cellBackground(cell);
+    button.setAttribute(
+      "aria-label",
+      cell.free
+        ? t(currentLocale, "freeCellLabel", { tokens: formatNumber(currentFreeTokens) })
+        : cellLabel(cell),
+    );
     button.dataset.index = String(cell.index);
 
     button.addEventListener("pointerenter", () => {
@@ -874,6 +931,10 @@ function renderMap(next: SnapshotSummary): void {
     });
     button.addEventListener("click", (event) => {
       event.stopPropagation();
+      if (cell.free) {
+        selectCategory(null);
+        return;
+      }
       pinnedCell = pinnedCell?.element === button ? null : { cell, element: button };
       refreshTooltip();
     });
@@ -894,28 +955,45 @@ function refreshTooltip(): void {
 
 function showTooltip(cell: MapCell, element: HTMLButtonElement): void {
   const fragment = document.createDocumentFragment();
-  for (const segment of cell.segments) {
+  if (cell.free) {
     const row = document.createElement("div");
     row.className = "tip-row";
     const dot = document.createElement("span");
-    dot.className = "swatch";
-    dot.style.background = `var(--cat-${segment.category})`;
+    dot.className = "swatch free";
     const name = document.createElement("span");
-    name.textContent = categoryLabel(segment.category);
+    name.textContent = t(currentLocale, "freeSpace");
     const tokens = document.createElement("span");
     tokens.className = "tip-tokens";
-    tokens.textContent = `${formatNumber(Math.round(segment.tokens))} tokens`;
+    tokens.textContent = `${formatNumber(currentFreeTokens)} tokens`;
     row.append(dot, name, tokens);
     fragment.append(row);
+    mapHint.textContent = t(currentLocale, "freeCellLabel", {
+      tokens: formatNumber(currentFreeTokens),
+    });
+  } else {
+    for (const segment of cell.segments) {
+      const row = document.createElement("div");
+      row.className = "tip-row";
+      const dot = document.createElement("span");
+      dot.className = "swatch";
+      dot.style.background = `var(--cat-${segment.category})`;
+      const name = document.createElement("span");
+      name.textContent = categoryLabel(segment.category);
+      const tokens = document.createElement("span");
+      tokens.className = "tip-tokens";
+      tokens.textContent = `${formatNumber(Math.round(segment.tokens))} tokens`;
+      row.append(dot, name, tokens);
+      fragment.append(row);
+    }
+    mapHint.textContent = cell.segments
+      .map(
+        (segment) =>
+          `${categoryLabel(segment.category)} ${formatNumber(Math.round(segment.tokens))}`,
+      )
+      .join(" · ");
   }
   mapTip.replaceChildren(fragment);
   mapTip.hidden = false;
-  mapHint.textContent = cell.segments
-    .map(
-      (segment) =>
-        `${categoryLabel(segment.category)} ${formatNumber(Math.round(segment.tokens))}`,
-    )
-    .join(" · ");
   positionTooltip(element);
 }
 
@@ -1159,8 +1237,7 @@ function renderBreakdown(): void {
   const free = document.createElement("div");
   free.className = "row row-free";
   const freeSwatch = document.createElement("span");
-  freeSwatch.className = "swatch";
-  freeSwatch.style.background = "var(--cat-free)";
+  freeSwatch.className = "swatch free";
   const freeName = document.createElement("span");
   freeName.className = "row-name";
   freeName.textContent = t(currentLocale, "freeSpace");

@@ -11,10 +11,12 @@ export const MAP_ROWS = 8;
 /** 窄视口地图：20 列 × 10 行。两套断点都是 200 格，布局只改列数。 */
 export const COMPACT_COLUMNS = 20;
 export const COMPACT_ROWS = 10;
-/** 格子总数；地图只表达 Used 的构成，不把 Free space 摊进格子。 */
+/** 格子总数；地图表达分母，已用之外的格子留空。 */
 export const MAP_CELLS = MAP_COLUMNS * MAP_ROWS;
 
 const EPSILON = 1e-9;
+const MIN_FIT_DENOMINATOR = 10_000;
+const FIT_HEADROOM = 1.15;
 
 export interface MapSegment {
   category: Category;
@@ -29,15 +31,19 @@ export interface MapSegment {
 export interface MapCell {
   index: number;
   segments: MapSegment[];
-  /** 占比最大的分类，用作格子的主色与无障碍描述。 */
-  primary: Category;
+  /** 占比最大的分类；空格子为 free。 */
+  primary: Category | "free";
+  /** 整格都是 Free space。 */
+  free: boolean;
 }
 
 export interface MapLayout {
   cells: MapCell[];
-  /** 地图表达的总 token 数，即所有非空分类之和。 */
+  /** 已用 token 总数，即所有非空分类之和。 */
   total: number;
-  /** 每个分类覆盖的格子下标，用于点选分类后的高亮。 */
+  /** 地图分母；用于图例与空格子的 token 说明。 */
+  denominator: number;
+  /** 每个分类覆盖的格子下标，用于点选分类后的高亮；不包含 free。 */
   cellsByCategory: Record<Category, number[]>;
 }
 
@@ -92,14 +98,15 @@ function positiveTokens(value: number | undefined): number {
 }
 
 /**
- * 把分类 token 铺到固定数量的格子上。
+ * 把已用分类铺到分母对应的格子上，剩余格子留空。
  *
- * 每格代表 `total / cellCount` 个 token；分类边界落在格子内部时，
- * 这一格会产生多个 segment，由面板渲染成渐变。格子总数不随 Used 变化，
- * 地图始终只表达 Used 的构成。
+ * 先用 Used / denominator 决定占用多少整格，再在占用格内按分类比例铺开；
+ * 分类边界落在格子内部时，这一格会产生多个 segment，由面板渲染成渐变。
+ * 返回全部 cellCount 个位置，空格子的 `primary` 为 free。
  */
 export function layoutMap(
   categories: readonly CategoryUsage[],
+  denominator: number,
   cellCount: number = MAP_CELLS,
 ): MapLayout {
   const cellsByCategory = emptyCellsByCategory();
@@ -117,14 +124,19 @@ export function layoutMap(
     total += tokens;
   }
 
-  if (total <= 0 || cellCount <= 0) {
-    return { cells: [], total: 0, cellsByCategory };
+  if (cellCount <= 0) {
+    return { cells: [], total, denominator: positiveTokens(denominator), cellsByCategory };
   }
 
-  const size = total / cellCount;
-  const cells: MapCell[] = [];
+  const safeDenominator = positiveTokens(denominator) || total;
+  const usedCells = total <= 0 || safeDenominator <= 0
+    ? 0
+    : Math.min(cellCount, Math.max(1, Math.round((total / safeDenominator) * cellCount)));
 
-  for (let index = 0; index < cellCount; index += 1) {
+  const cells: MapCell[] = [];
+  const size = usedCells > 0 ? total / usedCells : 0;
+
+  for (let index = 0; index < usedCells; index += 1) {
     const start = index * size;
     const end = (index + 1) * size;
     const segments: MapSegment[] = [];
@@ -144,26 +156,41 @@ export function layoutMap(
       });
     }
 
-    if (segments.length === 0) continue;
-
     const first = segments[0];
     const last = segments[segments.length - 1];
     if (first) first.from = 0;
     if (last) last.to = 1;
 
     let primary = segments[0];
-    if (!primary) continue;
+    if (!primary) {
+      cells.push({ index, segments: [], primary: "free", free: true });
+      continue;
+    }
     for (const segment of segments) {
       if (segment.tokens > primary.tokens) primary = segment;
     }
 
-    cells.push({ index, segments, primary: primary.category });
+    cells.push({ index, segments, primary: primary.category, free: false });
     for (const segment of segments) {
       cellsByCategory[segment.category].push(index);
     }
   }
 
-  return { cells, total, cellsByCategory };
+  for (let index = usedCells; index < cellCount; index += 1) {
+    cells.push({ index, segments: [], primary: "free", free: true });
+  }
+
+  return { cells, total, denominator: safeDenominator, cellsByCategory };
+}
+
+/** Fit 档的分母：留 15% 余量，向上取两位有效数字，最低 10k。 */
+export function fitDenominator(used: number): number {
+  const scaled = positiveTokens(used) * FIT_HEADROOM;
+  if (!Number.isFinite(scaled)) return Number.MAX_SAFE_INTEGER;
+  if (scaled <= 0) return MIN_FIT_DENOMINATOR;
+  const magnitude = 10 ** (Math.floor(Math.log10(scaled)) - 1);
+  const rounded = Math.ceil(scaled / magnitude) * magnitude;
+  return Math.max(MIN_FIT_DENOMINATOR, rounded);
 }
 
 /** 把格子内的分段换算成 CSS 渐变停靠点，百分比连续覆盖 0..100。 */
