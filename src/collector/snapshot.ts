@@ -5,7 +5,7 @@ import {
   type ItemSummary,
   type SnapshotSummary,
 } from "../shared/types.ts";
-import type { ContentPart, ModelRef, SessionContext } from "./opencode.ts";
+import { modelRefID, type ContentPart, type ModelRef, type SessionContext } from "./opencode.ts";
 
 /** 单条预览上限；原始 payload 在 hook 返回后即丢弃。 */
 export const PREVIEW_LIMIT = 8_000;
@@ -106,7 +106,7 @@ export function measureValue(value: unknown, previewLimit: number): { chars: num
 
 export function modelLabel(ref: ModelRef): string {
   const provider = typeof ref.providerID === "string" ? ref.providerID : "";
-  const model = typeof ref.modelID === "string" && ref.modelID ? ref.modelID : "unknown";
+  const model = modelRefID(ref) || "unknown";
   return provider ? `${provider}/${model}` : model;
 }
 
@@ -210,7 +210,7 @@ export function buildDraft(context: SessionContext, collectedAt: string): Snapsh
     model: modelLabel(context.model),
     modelRef: {
       providerID: context.model.providerID,
-      modelID: context.model.modelID,
+      modelID: modelRefID(context.model),
     },
     collectedAt,
     items,

@@ -6,7 +6,7 @@ import type { DiscoveryRecord, SnapshotItemDetail } from "../shared/types.ts";
 import { COLLECTOR_VERSION } from "../shared/version.ts";
 import { BaselineStore, baselineSummary, type BaselineTemplate } from "./baseline.ts";
 import { enrichSnapshot, WindowResolver } from "./enrich.ts";
-import type { PluginContext, SessionContext, SessionInfo } from "./opencode.ts";
+import { modelRefID, type PluginContext, type SessionContext, type SessionInfo } from "./opencode.ts";
 import { baselineDraft, buildDraft, DEFAULT_WINDOW } from "./snapshot.ts";
 import { SnapshotStore } from "./store.ts";
 
@@ -79,7 +79,7 @@ const collector: CollectorPlugin = {
       }
       const agent = typeof info?.agent === "string" ? info.agent : "";
       const ref = info?.model;
-      if (!agent || !ref || typeof ref.providerID !== "string" || typeof ref.modelID !== "string") {
+      if (!agent || !ref || typeof ref.providerID !== "string" || !modelRefID(ref)) {
         return null;
       }
       return baselines.get(agent, ref) ?? null;
