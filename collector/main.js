@@ -510,7 +510,12 @@ var collector = {
       const get = context.session?.get;
       if (!get)
         return null;
-      const info = await get.call(context.session, { sessionID });
+      let info;
+      try {
+        info = await get.call(context.session, { sessionID });
+      } catch {
+        return null;
+      }
       const agent = typeof info?.agent === "string" ? info.agent : "";
       const ref = info?.model;
       if (!agent || !ref || typeof ref.providerID !== "string" || typeof ref.modelID !== "string") {
