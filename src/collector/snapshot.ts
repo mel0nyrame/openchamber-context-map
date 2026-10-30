@@ -274,6 +274,7 @@ export function finalizeSnapshot(
     window,
     windowAssumed,
     estimated: providerUsed === null || draft.hasMedia || rawTotal === 0,
+    baseline: false,
     collectedAt: draft.collectedAt,
     categories,
     items: draft.items.map(({ id, title, chars, head }) => ({ id, title, chars, head })),

@@ -3,6 +3,8 @@
  * 这里不碰 DOM 和计时器，只维护状态，面板按 `pollDelay` 决定是否挂计时器。
  */
 
+import type { MessageKey } from "./i18n.ts";
+
 /** busy 时的轮询间隔。 */
 export const POLL_INTERVAL_MS = 2_000;
 
@@ -27,8 +29,8 @@ export interface RefreshState {
 
 export interface RefreshBanner {
   tone: "warning";
-  title: string;
-  body: string;
+  titleKey: MessageKey;
+  bodyKey: MessageKey;
 }
 
 export function initialRefreshState(visible = true): RefreshState {
@@ -118,15 +120,15 @@ export function refreshBanner(state: RefreshState): RefreshBanner | null {
   if (pollingHalted(state)) {
     return {
       tone: "warning",
-      title: "自动刷新已暂停",
-      body: "连续 3 次自动刷新失败。恢复后点「刷新」重试。",
+      titleKey: "refreshHaltedTitle",
+      bodyKey: "refreshHaltedBody",
     };
   }
   if (state.manualFailure) {
     return {
       tone: "warning",
-      title: "刷新失败",
-      body: "显示的是上次采集的快照。点「刷新」重试。",
+      titleKey: "refreshFailedTitle",
+      bodyKey: "refreshFailedBody",
     };
   }
   return null;
