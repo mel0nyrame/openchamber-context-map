@@ -21,4 +21,6 @@ Issue 与 spec 存放在本仓库的 GitHub Issues（`mel0nyrame/openchamber-con
 - 面板的几何、取整、配色与刷新策略放纯函数模块（`src/panel/map.ts`、`palette.ts`、`refresh.ts`）并单测；主题用 `data-oc-theme` 选择器切换，不读系统偏好。
 - 失败状态按来源分层：host 失败、Collector 不可用、单次请求失败各有独立状态与文案，不要合并成一句通用错误。理由见 `docs/adr/0008-degradation-layers.md`。
 - 安装脚本只接受空目标或本工具生成的目标，冲突时停止并保留原文件；改写 `extensions.json` 时保留未知字段。理由见 `docs/adr/0010-installation.md`。
+- 面板文案只写在 `src/panel/i18n.ts`，渲染代码通过 `t(locale, key)` 取值；`en` 是源语言，`zh` 是翻译，其余 locale 回退 `en`。理由见 `docs/adr/0013-panel-localization.md`。
+- README 用英文；`docs/` 与 ADR 用中文。
 - OpenCode V2 插件接口与已核实的事实见 `docs/opencode-plugin.md`。
