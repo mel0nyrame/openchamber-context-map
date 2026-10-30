@@ -15,15 +15,24 @@ export function discoveryFileName(pid: number): string {
   return `collector-${pid}.json`;
 }
 
+let tempSequence = 0;
+
 export async function writeDiscovery(dir: string, record: DiscoveryRecord): Promise<string> {
   await mkdir(dir, { recursive: true, mode: 0o700 });
   await chmod(dir, 0o700);
 
   const file = join(dir, discoveryFileName(record.pid));
-  const temp = `${file}.tmp`;
-  await writeFile(temp, JSON.stringify(record), { mode: 0o600 });
-  await chmod(temp, 0o600);
-  await rename(temp, file);
+  // 同一进程可能并发 setup（宿主重载），临时名必须唯一，否则 rename 会抢文件。
+  tempSequence += 1;
+  const temp = `${file}.${process.pid}.${tempSequence}.tmp`;
+  try {
+    await writeFile(temp, JSON.stringify(record), { mode: 0o600 });
+    await chmod(temp, 0o600);
+    await rename(temp, file);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
   return file;
 }
 

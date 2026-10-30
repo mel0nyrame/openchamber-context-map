@@ -21,14 +21,21 @@ function resolveDiscoveryDir(env = process.env) {
 function discoveryFileName(pid) {
   return `collector-${pid}.json`;
 }
+var tempSequence = 0;
 async function writeDiscovery(dir, record) {
   await mkdir(dir, { recursive: true, mode: 448 });
   await chmod(dir, 448);
   const file = join(dir, discoveryFileName(record.pid));
-  const temp = `${file}.tmp`;
-  await writeFile(temp, JSON.stringify(record), { mode: 384 });
-  await chmod(temp, 384);
-  await rename(temp, file);
+  tempSequence += 1;
+  const temp = `${file}.${process.pid}.${tempSequence}.tmp`;
+  try {
+    await writeFile(temp, JSON.stringify(record), { mode: 384 });
+    await chmod(temp, 384);
+    await rename(temp, file);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
   return file;
 }
 async function removeDiscovery(file) {
