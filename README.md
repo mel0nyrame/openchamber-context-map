@@ -11,8 +11,8 @@ Context Map 是 OpenChamber 的 rail 面板，用来查看当前 session 最后�
 
 - macOS 或 Linux（当前只在 macOS 上验证过；Windows 未验证）。
 - [Bun](https://bun.sh/) 1.3 或更高版本。
-- OpenChamber 1.22.0 或更高版本。
-- OpenCode 2.2 或更高版本，需要 V2 插件接口。
+- OpenChamber 2.5.2（当前验证版本）。
+- OpenCode 2.2.2（当前验证版本），需要 V2 插件接口。
 - 仓库放在稳定路径。扩展以软链方式安装，安装后不要移动或删除仓库目录。
 
 ## 安装
@@ -32,7 +32,7 @@ bun run install
 安装完成后，**完全退出** OpenCode 和 OpenChamber，再重新打开：
 
 - OpenCode 要完全退出，不能只关窗口；Collector 只在进程启动时加载。
-- OpenChamber 重新打开后，在左侧 rail 里打开 **Context Map**。
+- OpenChamber 重新打开后，在rail 里打开 **Context Map**。
 - 面板状态应显示 `Collector 已连接 · v0.1.0`。如果显示 `Collector 未运行`，先确认 OpenCode 确实已经重启。
 
 默认路径如下：
