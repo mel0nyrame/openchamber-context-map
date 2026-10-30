@@ -272,7 +272,7 @@ ${wo}`;var ar=2000,cr=`
     background: color-mix(in srgb, var(--oc-fg) 4%, transparent); }
   .dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--oc-muted); }
   .status[data-state="connected"] .dot { background: var(--oc-success); }
-  .status[data-state="disconnected"] .dot { background: var(--oc-warning); }
+  .status[data-state="disconnected"] .dot { background: var(--oc-warning, #d97706); }
   .status[data-state="failed"] .dot { background: var(--oc-error); }
   .status-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .status-title { font-weight: 600; }
