@@ -46,6 +46,8 @@ async function readDiscoveryRecords(dir) {
 
 // src/service/main.ts
 var PROBE_TIMEOUT_MS = 1000;
+var FORWARD_TIMEOUT_MS = 3000;
+var ROUTE_CACHE_MS = 2000;
 function fail(message) {
   console.error(`[context-map] ${message}`);
   process.exit(1);
@@ -91,20 +93,92 @@ async function collectorStatus() {
   const probed = await Promise.all(records.map((record) => probeCollector(record)));
   return probed.find((status) => status !== null) ?? { connected: false, reason: "unreachable" };
 }
+var cachedCollector = null;
+async function activeCollector() {
+  if (cachedCollector && cachedCollector.expiresAt > Date.now()) {
+    return cachedCollector.record;
+  }
+  const records = await readDiscoveryRecords(resolveDiscoveryDir());
+  const probed = await Promise.all(records.map(async (record) => ({ record, status: await probeCollector(record) })));
+  const hit = probed.find((entry) => entry.status !== null);
+  if (!hit) {
+    cachedCollector = null;
+    return null;
+  }
+  cachedCollector = { record: hit.record, expiresAt: Date.now() + ROUTE_CACHE_MS };
+  return hit.record;
+}
+function isTimeout(error) {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+async function forward(response, path, params) {
+  try {
+    const collector = await activeCollector();
+    if (!collector) {
+      sendJson(response, 503, { error: "collector_unavailable" });
+      return;
+    }
+    const query = new URLSearchParams(params).toString();
+    const upstream = await fetch(`http://127.0.0.1:${collector.port}${path}?${query}`, {
+      headers: { Authorization: `Bearer ${collector.token}` },
+      signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS)
+    });
+    if (upstream.status === 200) {
+      const body = await upstream.text();
+      response.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store"
+      });
+      response.end(body);
+      return;
+    }
+    if (upstream.status === 400) {
+      sendJson(response, 400, { error: "bad_request" });
+      return;
+    }
+    if (upstream.status === 404) {
+      sendJson(response, 404, { error: "no_snapshot" });
+      return;
+    }
+    sendJson(response, 503, { error: "collector_unavailable" });
+  } catch (error) {
+    if (isTimeout(error)) {
+      sendJson(response, 504, { error: "collector_timeout" });
+      return;
+    }
+    sendJson(response, 503, { error: "collector_unavailable" });
+  }
+}
 var server = createServer((request, response) => {
   if (request.headers.authorization !== `Bearer ${token}`) {
     sendJson(response, 401, { error: "unauthorized" });
     return;
   }
-  const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+  const url = new URL(request.url ?? "/", "http://127.0.0.1");
+  const path = url.pathname;
   if (request.method === "GET" && path === "/health") {
     collectorStatus().then((collector) => {
       sendJson(response, 200, { ok: true, collector });
     });
     return;
   }
-  if (request.method === "GET" && (path === "/summary" || path === "/item")) {
-    sendJson(response, 404, { error: "no_snapshot" });
+  if (request.method === "GET" && path === "/summary") {
+    const sessionID = url.searchParams.get("sessionID")?.trim();
+    if (!sessionID) {
+      sendJson(response, 400, { error: "bad_request" });
+      return;
+    }
+    forward(response, "/summary", { sessionID });
+    return;
+  }
+  if (request.method === "GET" && path === "/item") {
+    const sessionID = url.searchParams.get("sessionID")?.trim();
+    const itemId = url.searchParams.get("itemId")?.trim();
+    if (!sessionID || !itemId) {
+      sendJson(response, 400, { error: "bad_request" });
+      return;
+    }
+    forward(response, "/item", { sessionID, itemId });
     return;
   }
   sendJson(response, 404, { error: "not_found" });
