@@ -8,6 +8,7 @@ import {
   MAP_ROWS,
   buildBreakdown,
   categoryOfItem,
+  fitDenominator,
   gradientStops,
   itemsForCategory,
   layoutMap,
@@ -57,7 +58,7 @@ describe("地图几何", () => {
     ];
 
     for (const categories of distributions) {
-      const layout = layoutMap(categories);
+      const layout = layoutMap(categories, 200_000);
       expect(layout.cells).toHaveLength(MAP_CELLS);
       expect(layout.cells.map((cell) => cell.index)).toEqual(
         Array.from({ length: MAP_CELLS }, (_, index) => index),
@@ -65,17 +66,19 @@ describe("地图几何", () => {
     }
   });
 
-  test("没有已用 token 时不铺格", () => {
-    const layout = layoutMap(usage({}));
-    expect(layout.cells).toHaveLength(0);
+  test("没有已用 token 时 200 格全是 Free", () => {
+    const layout = layoutMap(usage({}), 200_000);
+    expect(layout.cells).toHaveLength(MAP_CELLS);
     expect(layout.total).toBe(0);
+    expect(layout.cells.every((cell) => cell.free)).toBe(true);
+    expect(layout.cells.every((cell) => cell.primary === "free")).toBe(true);
     for (const category of CATEGORIES) {
       expect(layout.cellsByCategory[category]).toHaveLength(0);
     }
   });
 
   test("单分类占满全部格子", () => {
-    const layout = layoutMap(usage({ system: 1_000 }));
+    const layout = layoutMap(usage({ system: 1_000 }), 1_000);
     expect(layout.total).toBe(1_000);
     expect(layout.cellsByCategory.system).toHaveLength(MAP_CELLS);
 
@@ -92,6 +95,7 @@ describe("地图几何", () => {
   test("跨分类边界的格子产生两段渐变", () => {
     const layout = layoutMap(
       usage({ system: 100, toolDefinitions: 100, userMessages: 100 }),
+      300,
     );
 
     const firstBoundary = layout.cells[66];
@@ -114,6 +118,7 @@ describe("地图几何", () => {
   test("渐变停靠点连续覆盖 0% 到 100%", () => {
     const layout = layoutMap(
       usage({ system: 37, toolDefinitions: 41, userMessages: 43, reasoning: 47 }),
+      168,
     );
 
     for (const cell of layout.cells) {
@@ -134,6 +139,7 @@ describe("地图几何", () => {
   test("空分类不占格", () => {
     const layout = layoutMap(
       usage({ system: 1_000, toolDefinitions: 0, userMessages: 0 }),
+      1_000,
     );
     const categories = new Set(
       layout.cells.flatMap((cell) => cell.segments.map((segment) => segment.category)),
@@ -149,7 +155,7 @@ describe("地图几何", () => {
       { category: "userMessages", items: 1, chars: 4, tokens: 1 },
       { category: "system", items: 1, chars: 4, tokens: 1 },
     ];
-    const layout = layoutMap(shuffled, 1);
+    const layout = layoutMap(shuffled, 3, 1);
     expect(layout.cells[0]?.segments.map((segment) => segment.category)).toEqual([
       "system",
       "userMessages",
@@ -158,7 +164,7 @@ describe("地图几何", () => {
   });
 
   test("按 token 比例分配格子", () => {
-    const layout = layoutMap(usage({ system: 750, other: 250 }));
+    const layout = layoutMap(usage({ system: 750, other: 250 }), 1_000);
     expect(layout.cellsByCategory.system).toHaveLength(150);
     expect(layout.cellsByCategory.other).toHaveLength(50);
     expect(layout.cells[149]?.primary).toBe("system");
@@ -168,6 +174,7 @@ describe("地图几何", () => {
   test("每格 token 之和等于分类总量", () => {
     const layout = layoutMap(
       usage({ system: 123, toolDefinitions: 456, toolResults: 789 }),
+      1_368,
     );
     const cellTotal = layout.cells.reduce(
       (sum, cell) => sum + cell.segments.reduce((inner, segment) => inner + segment.tokens, 0),
@@ -180,6 +187,80 @@ describe("地图几何", () => {
         cell.segments.reduce((sum, segment) => sum + segment.tokens, 0),
       ).toBeCloseTo(layout.total / MAP_CELLS, 6);
     }
+  });
+});
+
+describe("Free 格与 Fit 分母", () => {
+  test("地图用 200 格表达整个分母", () => {
+    const layout = layoutMap(usage({ system: 85_300 }), 200_000);
+    const free = layout.cells.filter((cell) => cell.free);
+
+    expect(layout.denominator).toBe(200_000);
+    expect(layout.cells).toHaveLength(MAP_CELLS);
+    expect(free).toHaveLength(115);
+    expect(layout.cellsByCategory.system).toHaveLength(85);
+    expect(free.every((cell) => cell.segments.length === 0)).toBe(true);
+    expect(free.every((cell) => cell.primary === "free")).toBe(true);
+  });
+
+  test("Free 格数随分母变化", () => {
+    const layout = layoutMap(usage({ system: 85_300 }), 100_000);
+    expect(layout.cells.filter((cell) => cell.free)).toHaveLength(29);
+    expect(layout.cellsByCategory.system).toHaveLength(171);
+  });
+
+  test("cellsByCategory 只包含真实分类", () => {
+    const layout = layoutMap(usage({ system: 60_000, userMessages: 25_300 }), 200_000);
+    const drawn = new Set(
+      Object.values(layout.cellsByCategory).flatMap((indices) => indices),
+    );
+    expect(Object.keys(layout.cellsByCategory)).toEqual([...CATEGORIES]);
+    for (const index of drawn) {
+      expect(layout.cells[index]?.free).toBe(false);
+    }
+    expect(drawn.size).toBe(85);
+    expect(layout.cellsByCategory.system.length).toBeGreaterThan(0);
+    expect(layout.cellsByCategory.userMessages.length).toBeGreaterThan(0);
+  });
+
+  test("已用超过分母时没有 Free 格", () => {
+    const layout = layoutMap(usage({ system: 250_000 }), 200_000);
+    expect(layout.cells.every((cell) => !cell.free)).toBe(true);
+    expect(layout.cellsByCategory.system).toHaveLength(MAP_CELLS);
+  });
+
+  test("分类边界仍保留混合格", () => {
+    const layout = layoutMap(
+      usage({ system: 100, toolDefinitions: 100, userMessages: 100 }),
+      300,
+    );
+    expect(layout.cells[66]?.segments.map((segment) => segment.category)).toEqual([
+      "system",
+      "toolDefinitions",
+    ]);
+    expect(layout.cells[133]?.segments.map((segment) => segment.category)).toEqual([
+      "toolDefinitions",
+      "userMessages",
+    ]);
+  });
+
+  test("fitDenominator 覆盖 0、1k、85.3k 与巨大值", () => {
+    expect(fitDenominator(0)).toBe(10_000);
+    expect(fitDenominator(1_000)).toBe(10_000);
+    expect(fitDenominator(85_300)).toBe(99_000);
+    expect(fitDenominator(1_000_000)).toBe(1_200_000);
+    expect(fitDenominator(1_000_000_000_000)).toBe(1_200_000_000_000);
+    expect(Number.isFinite(fitDenominator(Number.MAX_SAFE_INTEGER))).toBe(true);
+  });
+
+  test("fitDenominator 单调不减且按窗口封顶", () => {
+    const values = [0, 1, 999, 1_000, 10_000, 85_300, 1_000_000];
+    const fits = values.map((value) => fitDenominator(value));
+    for (let index = 1; index < fits.length; index += 1) {
+      expect(fits[index]!).toBeGreaterThanOrEqual(fits[index - 1]!);
+    }
+    expect(Math.min(200_000, fitDenominator(85_300))).toBe(99_000);
+    expect(Math.min(50_000, fitDenominator(85_300))).toBe(50_000);
   });
 });
 
