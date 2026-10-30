@@ -1,5 +1,5 @@
 import { connectHost, HostRequestError, type SessionSnapshot } from "@openchamber/sdk";
-import { applyHostReady, mountBadge, mountProgress } from "@openchamber/sdk/ui";
+import { applyHostReady, mountBadge, mountBanner, mountButton, mountProgress } from "@openchamber/sdk/ui";
 
 import {
   CATEGORIES,
@@ -30,8 +30,19 @@ import {
   moveFocus,
   previewTruncated,
 } from "./preview.ts";
-
-const POLL_MS = 2_000;
+import {
+  busyChanged,
+  initialRefreshState,
+  pollDelay,
+  refreshBanner,
+  refreshFailed,
+  refreshSucceeded,
+  sessionChanged,
+  sessionPhaseChanged,
+  visibilityChanged,
+  type RefreshState,
+  type RefreshTrigger,
+} from "./refresh.ts";
 
 const STYLE = `
   html, body { margin: 0; background: transparent; color: var(--oc-fg); font: 12px/1.4 var(--oc-font); }
@@ -39,8 +50,11 @@ const STYLE = `
   html, body { height: 100%; overflow-y: auto; overflow-x: hidden; }
   #root { display: flex; flex-direction: column; gap: 14px; padding: 12px 12px 20px; }
   .head { display: flex; flex-direction: column; gap: 2px; }
+  .head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .head-actions { flex: none; display: flex; align-items: center; gap: 6px; }
   .title { font-size: 13px; font-weight: 600; }
   .subtitle { color: var(--oc-muted); font-size: 11px; }
+  .updated { color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   .usage, .card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--oc-radius);
     background: color-mix(in srgb, var(--oc-fg) 4%, transparent); }
   .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-height: 18px; }
@@ -182,13 +196,36 @@ document.head.append(style, palette);
 
 const head = document.createElement("div");
 head.className = "head";
+const headRow = document.createElement("div");
+headRow.className = "head-row";
 const title = document.createElement("div");
 title.className = "title";
 title.textContent = "Context Map";
+const headActions = document.createElement("div");
+headActions.className = "head-actions";
+const refreshButton = mountButton(headActions, {
+  label: "刷新",
+  variant: "outline",
+  size: "xs",
+  onClick: () => manualRefresh(),
+});
 const subtitle = document.createElement("div");
 subtitle.className = "subtitle";
 subtitle.textContent = "最后一次请求的上下文构成";
-head.append(title, subtitle);
+const updated = document.createElement("div");
+updated.className = "updated";
+updated.hidden = true;
+headRow.append(title, headActions);
+head.append(headRow, subtitle, updated);
+
+const bannerSlot = document.createElement("div");
+bannerSlot.hidden = true;
+const banner = mountBanner(bannerSlot, {
+  tone: "warning",
+  title: "刷新失败",
+  body: "",
+  action: { label: "重试", onClick: () => manualRefresh() },
+});
 
 const usage = document.createElement("section");
 usage.className = "usage";
@@ -346,13 +383,20 @@ statusDetail.className = "status-detail";
 statusText.append(statusTitle, statusDetail);
 status.append(dot, statusText);
 
-root.append(head, usage, mapCard, breakdownCard, placeholder, status);
+root.append(head, bannerSlot, usage, mapCard, breakdownCard, placeholder, status);
 
 let session: SessionSnapshot | null = null;
 let connected = false;
 let booted = false;
 let summary: SnapshotSummary | null = null;
 let summaryProblem = false;
+let refreshState: RefreshState = initialRefreshState(document.visibilityState !== "hidden");
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let refreshInFlight = false;
+let refreshToken = 0;
+let queuedRefresh: RefreshTrigger | null = null;
+let manualLoading = false;
+let started = false;
 
 interface CellTarget {
   cell: MapCell;
@@ -384,7 +428,6 @@ let focusedItemFallback = 0;
 let itemButtons: HTMLButtonElement[] = [];
 let notice: string | null = null;
 let copyTimer: number | null = null;
-let summaryRequest = 0;
 
 document.addEventListener("pointerdown", (event) => {
   if (!pinnedCell) return;
@@ -500,7 +543,6 @@ function showPlaceholder(headline: string, detail: string): void {
   pinnedCell = null;
   preview = null;
   previewRequest += 1;
-  summaryRequest += 1;
   focusedItemId = null;
   focusedItemFallback = 0;
   itemButtons = [];
@@ -514,6 +556,7 @@ function showPlaceholder(headline: string, detail: string): void {
 }
 
 function renderContent(): void {
+  renderUpdated();
   if (!booted) {
     showPlaceholder("正在连接 Collector…", "首次打开面板时，本地 Service 可能需要一点时间启动。");
     return;
@@ -544,6 +587,40 @@ function formatNumber(value: number): string {
 function formatPercent(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/** 「更新于」只显示快照的采集时间，不用本地当前时间冒充。 */
+function renderUpdated(): void {
+  const collectedAt = summary?.collectedAt ?? null;
+  if (collectedAt === null) {
+    updated.hidden = true;
+    updated.textContent = "";
+    updated.removeAttribute("title");
+    return;
+  }
+
+  const date = new Date(collectedAt);
+  if (Number.isNaN(date.getTime())) {
+    updated.hidden = false;
+    updated.textContent = `更新于 ${collectedAt}`;
+    updated.title = collectedAt;
+    return;
+  }
+
+  const today = new Date();
+  const sameDay = date.getFullYear() === today.getFullYear()
+    && date.getMonth() === today.getMonth()
+    && date.getDate() === today.getDate();
+  const clock = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+  updated.hidden = false;
+  updated.textContent = sameDay
+    ? `更新于 ${clock}`
+    : `更新于 ${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
+  updated.title = `采集于 ${date.toLocaleString("zh-CN", { hour12: false })}`;
 }
 
 function snapshotSignature(next: SnapshotSummary): string {
@@ -1029,7 +1106,7 @@ async function handlePreviewMissing(request: number): Promise<void> {
   renderBreakdown();
   if (selectedCategory) focusItemById(focusedItemId, fallback);
 
-  await refreshSummary();
+  await runRefresh("event");
   renderContent();
   if (selectedCategory) focusItemById(focusedItemId, fallback);
 }
@@ -1199,7 +1276,21 @@ function parseSummary(body: string): SnapshotSummary | null {
 function setSession(next: SessionSnapshot | null): void {
   const previous = session?.id ?? null;
   session = next;
-  if ((next?.id ?? null) === previous) return;
+  const nextID = next?.id ?? null;
+
+  if (nextID === previous) {
+    refreshState = busyChanged(refreshState, next?.busy ?? false);
+    reconcilePolling();
+    return;
+  }
+
+  refreshState = sessionChanged(refreshState, nextID, next?.busy ?? false);
+  // 旧 session 的请求已经没用了：作废它，立刻为新 session 拉一次。
+  refreshToken += 1;
+  refreshInFlight = false;
+  queuedRefresh = null;
+  setManualLoading(false);
+  stopPollTimer();
   summary = null;
   summaryProblem = false;
   selectedCategory = null;
@@ -1210,7 +1301,6 @@ function setSession(next: SessionSnapshot | null): void {
   pinnedCell = null;
   preview = null;
   previewRequest += 1;
-  summaryRequest += 1;
   focusedItemId = null;
   focusedItemFallback = 0;
   itemButtons = [];
@@ -1219,15 +1309,163 @@ function setSession(next: SessionSnapshot | null): void {
   breakdownBody.replaceChildren();
   hideTooltip();
   renderContent();
+  renderRefreshBanner();
+
+  if (started && nextID !== null) requestRefresh("event", true);
 }
 
-async function refreshSummary(): Promise<void> {
-  const request = ++summaryRequest;
+function stopPollTimer(): void {
+  if (refreshTimer === null) return;
+  clearTimeout(refreshTimer);
+  refreshTimer = null;
+}
+
+function renderRefreshBanner(): void {
+  const next = refreshBanner(refreshState);
+  bannerSlot.hidden = next === null;
+  if (next !== null) banner.update(next);
+}
+
+function setManualLoading(loading: boolean): void {
+  if (manualLoading === loading) return;
+  manualLoading = loading;
+  refreshButton.update({ loading });
+}
+
+/**
+ * 只保留一个计时器：每次轮询结束后再按策略挂下一次。
+ * 切换 session、转入 idle、连续失败或面板隐藏都会走到这里清掉它。
+ */
+function reconcilePolling(): void {
+  renderRefreshBanner();
+  if (refreshInFlight) return;
+
+  const delay = pollDelay(refreshState);
+  if (delay === null) {
+    stopPollTimer();
+    return;
+  }
+  if (refreshTimer !== null) return;
+
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    requestRefresh("poll");
+  }, delay);
+}
+
+function manualRefresh(): void {
+  if (!started || manualLoading) return;
+  setManualLoading(true);
+  requestRefresh("manual", true);
+}
+
+function requestRefresh(trigger: RefreshTrigger, supersede = false): void {
+  if (refreshInFlight && !supersede) {
+    if (trigger === "manual" || queuedRefresh === null) queuedRefresh = trigger;
+    return;
+  }
+  void runRefresh(trigger);
+}
+
+async function runRefresh(trigger: RefreshTrigger): Promise<void> {
+  const token = ++refreshToken;
+  const sessionAtStart = refreshState.sessionID;
+  // 首次加载和手动刷新要显示失败；之后的单次轮询/事件失败静默保留旧内容。
+  const quiet = trigger !== "manual" && booted;
+  refreshInFlight = true;
+  if (trigger === "manual") setManualLoading(true);
+
+  let ok = false;
+  try {
+    ok = await refreshOnce(token, quiet);
+  } catch {
+    ok = false;
+  } finally {
+    // 已被更新的请求（切 session 或手动刷新）取代：结果和 loading 都交给新请求。
+    if (token !== refreshToken) return;
+
+    refreshInFlight = false;
+    if (trigger === "manual") setManualLoading(false);
+    // 请求期间切走了 session：这次结果属于上一个 session，不计数也不清计数。
+    if (refreshState.sessionID === sessionAtStart) {
+      refreshState = ok ? refreshSucceeded(refreshState) : refreshFailed(refreshState, trigger);
+    }
+    renderRefreshBanner();
+
+    const next = queuedRefresh;
+    queuedRefresh = null;
+    if (next !== null && !(next === "poll" && pollDelay(refreshState) === null)) {
+      void runRefresh(next);
+      return;
+    }
+    reconcilePolling();
+  }
+}
+
+function noteUnreachable(error: unknown, unexpected = false): void {
+  booted = true;
+  // 已经有数据时静默保留，连续失败由 banner 统一提示。
+  if (summary !== null || connected) return;
+
+  connected = false;
+  summaryProblem = false;
+  renderStatus({
+    kind: "failed",
+    ...(unexpected
+      ? { title: "本地 Service 返回了意外结果", detail: "请稍后重试，或重新加载面板。" }
+      : failureOf(error)),
+  });
+  renderContent();
+}
+
+/** 拉一次 /health 和当前 session 的 /summary；返回这次刷新是否成功。 */
+async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
+  let health: { status: number; body: string };
+  try {
+    health = await host.serviceRequest({ method: "GET", path: "/health" });
+  } catch (error) {
+    if (token !== refreshToken) return true;
+    noteUnreachable(error);
+    return false;
+  }
+  if (token !== refreshToken) return true;
+
+  let body: HealthBody | null = null;
+  try {
+    body = JSON.parse(health.body) as HealthBody;
+  } catch {
+    body = null;
+  }
+
+  if (health.status !== 200 || !body?.collector) {
+    noteUnreachable(null, true);
+    return false;
+  }
+
+  const collector = body.collector;
+  if (collector.connected !== true || typeof collector.version !== "string") {
+    connected = false;
+    summary = null;
+    summaryProblem = false;
+    booted = true;
+    renderStatus({
+      kind: "disconnected",
+      reason: collector.reason === "unreachable" ? "unreachable" : "not_found",
+    });
+    renderContent();
+    return true;
+  }
+
+  connected = true;
+  renderStatus({ kind: "connected", version: collector.version });
+
   const current = session;
   if (!current) {
     summary = null;
     summaryProblem = false;
-    return;
+    booted = true;
+    renderContent();
+    return true;
   }
 
   const requestedSession = current.id;
@@ -1237,89 +1475,91 @@ async function refreshSummary(): Promise<void> {
       path: "/summary",
       query: { sessionID: requestedSession },
     });
-    if (session?.id !== requestedSession || request !== summaryRequest) return;
+    // 请求期间切走了 session 或被新请求取代：旧结果直接丢弃，不算失败。
+    if (token !== refreshToken) return true;
+    if (session?.id !== requestedSession) return true;
 
     if (result.status === 200) {
       const parsed = parseSummary(result.body);
+      if (parsed === null) {
+        if (!quiet) {
+          summaryProblem = summary === null;
+          booted = true;
+          renderContent();
+        }
+        return false;
+      }
       summary = parsed;
-      summaryProblem = parsed === null;
-      return;
-    }
-
-    summary = null;
-    summaryProblem = result.status !== 404;
-  } catch {
-    if (session?.id !== requestedSession || request !== summaryRequest) return;
-    summary = null;
-    summaryProblem = true;
-  }
-}
-
-let inflight = false;
-
-async function poll(): Promise<void> {
-  if (inflight) return;
-  inflight = true;
-  try {
-    const result = await host.serviceRequest({ method: "GET", path: "/health" });
-    let body: HealthBody | null = null;
-    try {
-      body = JSON.parse(result.body) as HealthBody;
-    } catch {
-      body = null;
-    }
-
-    if (result.status !== 200 || !body?.collector) {
-      connected = false;
+      summaryProblem = false;
+    } else if (result.status === 404) {
       summary = null;
       summaryProblem = false;
-      renderStatus({ kind: "failed", title: "本地 Service 返回了意外结果", detail: "请稍后重试，或重新加载面板。" });
-      renderContent();
-      return;
-    }
-
-    const collector = body.collector;
-    if (collector.connected === true && typeof collector.version === "string") {
-      connected = true;
-      renderStatus({ kind: "connected", version: collector.version });
     } else {
-      connected = false;
-      summary = null;
-      summaryProblem = false;
-      renderStatus({
-        kind: "disconnected",
-        reason: collector.reason === "unreachable" ? "unreachable" : "not_found",
-      });
+      if (!quiet) {
+        summaryProblem = summary === null;
+        booted = true;
+        renderContent();
+      }
+      return false;
     }
-
-    if (connected) await refreshSummary();
-    booted = true;
-    renderContent();
-  } catch (error) {
-    connected = false;
-    summary = null;
-    summaryProblem = false;
-    booted = true;
-    renderStatus({ kind: "failed", ...failureOf(error) });
-    renderContent();
-  } finally {
-    inflight = false;
+  } catch {
+    if (token !== refreshToken) return true;
+    if (session?.id !== requestedSession) return true;
+    if (!quiet) {
+      summaryProblem = summary === null;
+      booted = true;
+      renderContent();
+    }
+    return false;
   }
+
+  booted = true;
+  renderContent();
+  return true;
 }
 
-let started = false;
+function applyVisibility(visible: boolean): void {
+  refreshState = visibilityChanged(refreshState, visible);
+  reconcilePolling();
+}
+
+// SDK 2.5.3 没有面板可见性或卸载回调。iframe 被移除时计时器随文档销毁；
+// 顶层页面隐藏/恢复用 visibilitychange，bfcache 用 pagehide/pageshow。
+document.addEventListener("visibilitychange", () => {
+  applyVisibility(document.visibilityState !== "hidden");
+});
+window.addEventListener("pagehide", () => {
+  stopPollTimer();
+});
+window.addEventListener("pageshow", () => {
+  applyVisibility(document.visibilityState !== "hidden");
+});
 
 host.onSession((next) => {
-  const previous = session?.id ?? null;
   setSession(next);
-  if (started && (next?.id ?? null) !== previous) void poll();
+});
+
+host.onSessionLifecycle((event) => {
+  const previous = refreshState;
+  refreshState = sessionPhaseChanged(refreshState, event.sessionId, event.phase);
+  if (refreshState !== previous) {
+    if (!refreshState.busy) stopPollTimer();
+    renderRefreshBanner();
+  }
+
+  if (!started || event.sessionId !== session?.id) return;
+  // started 立刻拉一次并进入 2 秒轮询；completed/failure 拉完最后一份就停。
+  requestRefresh("event");
 });
 
 host.onReady((context) => {
   applyHostReady(context, document.documentElement);
   setSession(context.session);
-  if (started) return;
+  if (started) {
+    reconcilePolling();
+    return;
+  }
   started = true;
-  void poll();
-  setInterval(() => { void poll(); }, POLL_MS);
+  requestRefresh("event");
 });
+
