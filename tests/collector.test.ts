@@ -459,6 +459,23 @@ test("Collector 的 /summary 与 /item 校验 bearer，并区分缺参数与未�
   expect(missingItem.status).toBe(400);
 });
 
+test("Collector 对未知 itemId 返回 404", async () => {
+  const { port, token, fake } = await startCollector({ models: MODELS });
+
+  await fake.fire({
+    ...baseContext(),
+    messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+  });
+  await waitForSummary(port, token, "session-1", (value) => value.items.length > 0);
+
+  const unknownItem = await fetch(
+    `http://127.0.0.1:${port}/item?sessionID=session-1&itemId=userMessages:999`,
+    { headers: auth(token) },
+  );
+  expect(unknownItem.status).toBe(404);
+  expect(await unknownItem.json()).toEqual({ error: "not_found" });
+});
+
 test("Collector dispose 关闭服务、删除 discovery 文件并释放 hook", async () => {
   const { port, file, fake } = await startCollector();
   const cleanup = dispose!;

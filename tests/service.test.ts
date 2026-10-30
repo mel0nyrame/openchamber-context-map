@@ -94,6 +94,7 @@ function startFakeCollector(options: {
   summary?: unknown;
   item?: unknown;
   summaryStatus?: number;
+  itemStatus?: number;
   delaySummaryMs?: number;
 } = {}): ReturnType<typeof Bun.serve> {
   return Bun.serve({
@@ -114,8 +115,11 @@ function startFakeCollector(options: {
       if (url.pathname === "/summary" && options.delaySummaryMs) {
         await Bun.sleep(options.delaySummaryMs);
       }
-      if (options.summaryStatus && options.summaryStatus !== 200) {
+      if (url.pathname === "/summary" && options.summaryStatus && options.summaryStatus !== 200) {
         return Response.json({ error: "not_found" }, { status: options.summaryStatus });
+      }
+      if (url.pathname === "/item" && options.itemStatus && options.itemStatus !== 200) {
+        return Response.json({ error: "not_found" }, { status: options.itemStatus });
       }
       if (url.pathname === "/summary") {
         return Response.json(options.summary ?? {});
@@ -243,6 +247,19 @@ test("Collector 返回 404 时 Service 映射为 no_snapshot", async () => {
   });
 
   const response = await fetch(`${base}/summary?sessionID=missing`, { headers: hostAuth() });
+  expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({ error: "no_snapshot" });
+});
+
+test("Collector 对 /item 返回 404 时 Service 映射为 no_snapshot", async () => {
+  collector = startFakeCollector({ itemStatus: 404 });
+  const { base } = await startService(async () => {
+    await discover(collector!.port!);
+  });
+
+  const response = await fetch(`${base}/item?sessionID=session-1&itemId=missing:0`, {
+    headers: hostAuth(),
+  });
   expect(response.status).toBe(404);
   expect(await response.json()).toEqual({ error: "no_snapshot" });
 });
