@@ -6,11 +6,13 @@ import {
   type Category,
   type CategoryUsage,
   type ItemSummary,
+  type SnapshotItemDetail,
   type SnapshotSummary,
 } from "../shared/types.ts";
 import { CATEGORY_LABELS } from "./labels.ts";
 import {
   buildBreakdown,
+  categoryOfItem,
   gradientStops,
   itemsForCategory,
   layoutMap,
@@ -19,6 +21,15 @@ import {
   type MapLayout,
 } from "./map.ts";
 import { paletteCss } from "./palette.ts";
+import {
+  PREVIEW_MAX_CHARS,
+  clipPreviewText,
+  escapeTarget,
+  focusIndexFor,
+  layerOf,
+  moveFocus,
+  previewTruncated,
+} from "./preview.ts";
 
 const POLL_MS = 2_000;
 
@@ -85,11 +96,37 @@ const STYLE = `
   .drill-title { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 600; }
   .drill-meta { color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums;
     white-space: nowrap; }
-  .item-row { display: flex; flex-direction: column; gap: 1px; padding: 6px;
-    border-top: 1px solid color-mix(in srgb, var(--oc-fg) 8%, transparent); }
+  .breakdown-body { min-width: 0; }
+  .item-row { appearance: none; -webkit-appearance: none; display: flex; flex-direction: column; gap: 1px;
+    width: 100%; padding: 6px; border: 0; border-top: 1px solid color-mix(in srgb, var(--oc-fg) 8%, transparent);
+    border-radius: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .item-row:hover { background: color-mix(in srgb, var(--oc-fg) 7%, transparent); }
+  .item-row:focus-visible { background: color-mix(in srgb, var(--oc-fg) 7%, transparent);
+    outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: -2px; }
   .item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .item-meta { color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   .drill-empty { padding: 8px 6px; color: var(--oc-muted); font-size: 11px; }
+  .notice { padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--oc-warning, #d97706) 35%, transparent);
+    border-radius: 6px; background: color-mix(in srgb, var(--oc-warning, #d97706) 12%, transparent);
+    font-size: 11px; }
+  .preview { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 2px 6px 6px; }
+  .preview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .preview-title { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .preview-copy { appearance: none; -webkit-appearance: none; flex: none; padding: 2px 8px;
+    border: 1px solid var(--oc-border); border-radius: 4px; background: transparent; color: var(--oc-primary);
+    font: inherit; cursor: pointer; }
+  .preview-copy:hover:not(:disabled) { background: color-mix(in srgb, var(--oc-fg) 7%, transparent); }
+  .preview-copy:focus-visible { outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: -2px; }
+  .preview-copy:disabled { opacity: .5; cursor: default; }
+  .preview-meta { color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .preview-status { min-height: 0; color: var(--oc-muted); font-size: 11px; overflow-wrap: anywhere; }
+  .preview-status[data-tone="error"] { color: var(--oc-error); }
+  .preview-status[data-tone="ok"] { color: var(--oc-success); }
+  .preview-body { margin: 0; padding: 8px; max-width: 100%; max-height: 360px; overflow: auto;
+    border: 1px solid color-mix(in srgb, var(--oc-fg) 10%, transparent); border-radius: 6px;
+    background: color-mix(in srgb, var(--oc-fg) 3%, transparent); font-family: var(--oc-mono);
+    font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+  .preview-body:focus-visible { outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: -2px; }
   @media (max-width: 520px) {
     .map { grid-template-columns: repeat(20, minmax(0, 1fr)); }
     .row-meta { font-size: 10px; }
@@ -253,11 +290,39 @@ backButton.type = "button";
 backButton.className = "back";
 backButton.textContent = "返回";
 backButton.hidden = true;
-backButton.addEventListener("click", () => selectCategory(null));
+backButton.addEventListener("click", () => goBack());
 breakdownHead.append(breakdownTitle, backButton);
 const breakdownBody = document.createElement("div");
 breakdownBody.className = "breakdown-body";
 breakdownCard.append(breakdownHead, breakdownBody);
+
+const previewPanel = document.createElement("div");
+previewPanel.className = "preview";
+previewPanel.tabIndex = -1;
+previewPanel.setAttribute("role", "group");
+previewPanel.setAttribute("aria-label", "条目预览");
+const previewHead = document.createElement("div");
+previewHead.className = "preview-head";
+const previewTitle = document.createElement("div");
+previewTitle.className = "preview-title";
+const previewCopy = document.createElement("button");
+previewCopy.type = "button";
+previewCopy.className = "preview-copy";
+previewCopy.textContent = "复制";
+previewCopy.setAttribute("aria-label", "复制 Preview 正文");
+previewCopy.addEventListener("click", () => { void copyPreview(); });
+previewHead.append(previewTitle, previewCopy);
+const previewMeta = document.createElement("div");
+previewMeta.className = "preview-meta";
+const previewStatus = document.createElement("div");
+previewStatus.className = "preview-status";
+previewStatus.setAttribute("role", "status");
+previewStatus.setAttribute("aria-live", "polite");
+const previewBody = document.createElement("pre");
+previewBody.className = "preview-body";
+previewBody.tabIndex = 0;
+previewBody.setAttribute("aria-label", "Preview 正文");
+previewPanel.append(previewHead, previewMeta, previewStatus, previewBody);
 
 const placeholder = document.createElement("div");
 placeholder.className = "placeholder";
@@ -301,6 +366,26 @@ let cellElements = new Map<number, HTMLButtonElement>();
 let hoveredCell: CellTarget | null = null;
 let pinnedCell: CellTarget | null = null;
 
+interface PreviewState {
+  itemId: string;
+  category: Category;
+  title: string;
+  chars: number;
+  text: string;
+  loading: boolean;
+  error: string | null;
+  truncated: boolean;
+}
+
+let preview: PreviewState | null = null;
+let previewRequest = 0;
+let focusedItemId: string | null = null;
+let focusedItemFallback = 0;
+let itemButtons: HTMLButtonElement[] = [];
+let notice: string | null = null;
+let copyTimer: number | null = null;
+let summaryRequest = 0;
+
 document.addEventListener("pointerdown", (event) => {
   if (!pinnedCell) return;
   if (event.target instanceof Node && mapWrap.contains(event.target)) return;
@@ -309,11 +394,39 @@ document.addEventListener("pointerdown", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  pinnedCell = null;
-  hoveredCell = null;
-  refreshTooltip();
-  if (selectedCategory) selectCategory(null);
+  if (event.key === "Escape") {
+    pinnedCell = null;
+    hoveredCell = null;
+    refreshTooltip();
+    if (preview || selectedCategory) goBack();
+    return;
+  }
+
+  if (preview || !selectedCategory || event.defaultPrevented) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  const target = event.target;
+  if (
+    target instanceof HTMLElement
+    && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA"
+      || target.tagName === "SELECT")
+  ) {
+    return;
+  }
+
+  const key = event.key.toLowerCase();
+  const delta = key === "arrowdown" || key === "j" ? 1 : key === "arrowup" || key === "k" ? -1 : 0;
+  if (delta === 0) return;
+
+  const items = currentItems();
+  if (items.length === 0) return;
+  const activeIndex = itemButtons.indexOf(document.activeElement as HTMLButtonElement);
+  const currentIndex = activeIndex >= 0
+    ? activeIndex
+    : itemButtons.findIndex((button) => button.dataset.itemId === focusedItemId);
+  const next = moveFocus(currentIndex, items.length, delta);
+  if (next < 0) return;
+  event.preventDefault();
+  focusItemAt(next);
 });
 
 window.addEventListener("scroll", () => {
@@ -385,7 +498,16 @@ function showPlaceholder(headline: string, detail: string): void {
   mapSignature = null;
   hoveredCell = null;
   pinnedCell = null;
+  preview = null;
+  previewRequest += 1;
+  summaryRequest += 1;
+  focusedItemId = null;
+  focusedItemFallback = 0;
+  itemButtons = [];
+  notice = null;
+  resetCopyFeedback();
   hideTooltip();
+  breakdownBody.replaceChildren();
   placeholder.hidden = false;
   placeholderTitle.textContent = headline;
   placeholderDetail.textContent = detail;
@@ -572,13 +694,90 @@ function hideTooltip(): void {
   }
 }
 
+function currentItems(): ItemSummary[] {
+  if (!summary || !selectedCategory) return [];
+  return itemsForCategory(summary.items, selectedCategory);
+}
+
+function focusItemAt(index: number): void {
+  const button = itemButtons[index];
+  if (!button) return;
+  button.focus();
+  focusedItemId = button.dataset.itemId ?? null;
+  focusedItemFallback = index;
+}
+
+function focusItemById(itemId: string | null, fallback = 0): void {
+  const index = focusIndexFor(currentItems(), itemId, fallback);
+  if (index >= 0) focusItemAt(index);
+}
+
+function focusCategoryRow(category: Category): void {
+  for (const row of breakdownBody.querySelectorAll<HTMLButtonElement>("button.row[data-category]")) {
+    if (row.dataset.category === category) {
+      row.focus();
+      return;
+    }
+  }
+}
+
+function resetCopyFeedback(): void {
+  if (copyTimer !== null) {
+    window.clearTimeout(copyTimer);
+    copyTimer = null;
+  }
+  previewCopy.textContent = "复制";
+  previewStatus.textContent = "";
+  previewStatus.dataset.tone = "";
+}
+
 function selectCategory(category: Category | null): void {
   selectedCategory = category;
+  preview = null;
+  previewRequest += 1;
+  focusedItemId = null;
+  focusedItemFallback = 0;
+  notice = null;
+  resetCopyFeedback();
   hoveredCell = null;
   pinnedCell = null;
   refreshTooltip();
   applySelection();
   renderBreakdown();
+  if (category) {
+    if (currentItems().length > 0) focusItemAt(0);
+    else backButton.focus();
+  }
+}
+
+function closePreview(): void {
+  if (!preview) return;
+  const category = selectedCategory;
+  preview = null;
+  previewRequest += 1;
+  resetCopyFeedback();
+  renderBreakdown();
+  if (category && currentItems().length > 0) {
+    focusItemById(focusedItemId, focusedItemFallback);
+    return;
+  }
+  if (category) {
+    selectCategory(null);
+    focusCategoryRow(category);
+  }
+}
+
+function goBack(): void {
+  const layer = layerOf(selectedCategory, preview?.itemId ?? null);
+  if (layer === "overview") return;
+  if (escapeTarget(layer) === "items") {
+    closePreview();
+    return;
+  }
+  const previous = selectedCategory;
+  if (!previous) return;
+  selectCategory(null);
+  focusCategoryRow(previous);
 }
 
 function applySelection(): void {
@@ -594,12 +793,35 @@ function applySelection(): void {
 }
 
 function renderBreakdown(): void {
+  const active = document.activeElement;
+  const activeElement = active instanceof HTMLElement && breakdownBody.contains(active) ? active : null;
+  const activeItemId = activeElement?.dataset.itemId ?? null;
+  const activeCategory = activeElement?.dataset.category ?? null;
+
   breakdownBody.replaceChildren();
-  if (!summary || !currentLayout) return;
+  itemButtons = [];
+  if (!summary || !currentLayout) {
+    backButton.hidden = true;
+    return;
+  }
   const breakdown = buildBreakdown(summary.categories, summary.used, summary.window);
+  backButton.hidden = !selectedCategory && !preview;
+
+  if (preview) {
+    renderPreview(preview);
+    previewPanel.focus();
+    return;
+  }
+
+  if (notice) {
+    const note = document.createElement("div");
+    note.className = "notice";
+    note.setAttribute("role", "status");
+    note.textContent = notice;
+    breakdownBody.append(note);
+  }
 
   if (selectedCategory) {
-    backButton.hidden = false;
     const category = selectedCategory;
     const row = breakdown.rows.find((entry) => entry.category === category);
     const items = itemsForCategory(summary.items, category);
@@ -630,9 +852,11 @@ function renderBreakdown(): void {
       return;
     }
 
-    for (const entry of items) {
-      const itemRow = document.createElement("div");
+    for (const [index, entry] of items.entries()) {
+      const itemRow = document.createElement("button");
+      itemRow.type = "button";
       itemRow.className = "item-row";
+      itemRow.dataset.itemId = entry.id;
       const itemTitle = document.createElement("div");
       itemTitle.className = "item-title";
       itemTitle.textContent = entry.title || "未命名条目";
@@ -641,8 +865,16 @@ function renderBreakdown(): void {
       itemMeta.className = "item-meta";
       itemMeta.textContent = `${formatNumber(entry.chars)} 字符`;
       itemRow.append(itemTitle, itemMeta);
+      itemRow.addEventListener("click", () => { void openPreview(entry); });
+      itemRow.addEventListener("focus", () => {
+        focusedItemId = entry.id;
+        focusedItemFallback = index;
+      });
+      itemButtons.push(itemRow);
       breakdownBody.append(itemRow);
     }
+
+    if (activeItemId) focusItemById(activeItemId, focusedItemFallback);
     return;
   }
 
@@ -653,6 +885,7 @@ function renderBreakdown(): void {
     const row = document.createElement("button");
     row.type = "button";
     row.className = "row";
+    row.dataset.category = entry.category;
     const swatch = document.createElement("span");
     swatch.className = "swatch";
     swatch.style.background = `var(--cat-${entry.category})`;
@@ -685,6 +918,192 @@ function renderBreakdown(): void {
   free.append(freeSwatch, freeName, freeMeta);
   list.append(free);
   breakdownBody.append(list);
+
+  if (activeCategory && isCategory(activeCategory)) focusCategoryRow(activeCategory);
+}
+
+function renderPreview(state: PreviewState): void {
+  previewTitle.textContent = state.title || "未命名条目";
+  const suffix = state.truncated ? ` · 仅显示前 ${formatNumber(PREVIEW_MAX_CHARS)} 字符` : "";
+  previewMeta.textContent =
+    `${CATEGORY_LABELS[state.category]} · ${formatNumber(state.chars)} 字符${suffix}`;
+  previewBody.textContent = state.text;
+  previewBody.hidden = state.loading || state.error !== null;
+  previewCopy.disabled = state.loading || state.error !== null;
+  previewCopy.textContent = "复制";
+  if (state.loading) {
+    previewStatus.textContent = "正在读取 Preview…";
+    previewStatus.dataset.tone = "";
+  } else if (state.error) {
+    previewStatus.textContent = state.error;
+    previewStatus.dataset.tone = "error";
+  } else {
+    previewStatus.textContent = "";
+    previewStatus.dataset.tone = "";
+  }
+  breakdownBody.append(previewPanel);
+}
+
+async function openPreview(entry: ItemSummary): Promise<void> {
+  const category = categoryOfItem(entry.id) ?? selectedCategory;
+  const current = session;
+  if (!category || !current) return;
+
+  const request = ++previewRequest;
+  focusedItemId = entry.id;
+  const index = itemButtons.findIndex((button) => button.dataset.itemId === entry.id);
+  if (index >= 0) focusedItemFallback = index;
+  notice = null;
+  preview = {
+    itemId: entry.id,
+    category,
+    title: entry.title,
+    chars: entry.chars,
+    text: "",
+    loading: true,
+    error: null,
+    truncated: false,
+  };
+  renderBreakdown();
+
+  try {
+    const result = await host.serviceRequest({
+      method: "GET",
+      path: "/item",
+      query: { sessionID: current.id, itemId: entry.id },
+    });
+    if (request !== previewRequest || preview?.itemId !== entry.id) return;
+    if (session?.id !== current.id) return;
+
+    if (result.status === 404) {
+      await handlePreviewMissing(request);
+      return;
+    }
+    if (result.status !== 200) {
+      preview = {
+        ...preview,
+        loading: false,
+        error: "无法读取这条 Item 的 Preview，请稍后重试。",
+      };
+      renderBreakdown();
+      return;
+    }
+
+    const detail = parseItemDetail(result.body);
+    if (!detail) {
+      preview = { ...preview, loading: false, error: "Preview 数据格式不正确。" };
+      renderBreakdown();
+      return;
+    }
+
+    const text = clipPreviewText(detail.text);
+    preview = {
+      itemId: entry.id,
+      category,
+      title: detail.title || entry.title,
+      chars: detail.chars,
+      text,
+      loading: false,
+      error: null,
+      truncated: previewTruncated(detail.chars, text.length),
+    };
+    renderBreakdown();
+  } catch {
+    if (request !== previewRequest || preview?.itemId !== entry.id) return;
+    preview = {
+      ...preview,
+      loading: false,
+      error: "无法读取这条 Item 的 Preview，请稍后重试。",
+    };
+    renderBreakdown();
+  }
+}
+
+async function handlePreviewMissing(request: number): Promise<void> {
+  if (request !== previewRequest) return;
+  preview = null;
+  previewRequest += 1;
+  notice = "快照已更新，已刷新";
+  resetCopyFeedback();
+  const fallback = focusedItemFallback;
+  renderBreakdown();
+  if (selectedCategory) focusItemById(focusedItemId, fallback);
+
+  await refreshSummary();
+  renderContent();
+  if (selectedCategory) focusItemById(focusedItemId, fallback);
+}
+
+async function copyPreview(): Promise<void> {
+  if (!preview || preview.loading || preview.error !== null) return;
+  const itemId = preview.itemId;
+  const text = preview.text;
+  let copied = false;
+
+  try {
+    if (typeof navigator.clipboard?.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    }
+  } catch {
+    copied = false;
+  }
+  if (!copied) copied = copyWithExecCommand(text);
+  if (preview?.itemId !== itemId) return;
+
+  if (copied) {
+    previewStatus.textContent = "已复制 Preview 正文。";
+    previewStatus.dataset.tone = "ok";
+    previewCopy.textContent = "已复制";
+    if (copyTimer !== null) window.clearTimeout(copyTimer);
+    copyTimer = window.setTimeout(() => {
+      previewCopy.textContent = "复制";
+      copyTimer = null;
+    }, 1_500);
+    return;
+  }
+
+  previewStatus.textContent = "复制失败，请手动选择 Preview 正文。";
+  previewStatus.dataset.tone = "error";
+}
+
+function copyWithExecCommand(text: string): boolean {
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "0";
+  area.style.left = "-9999px";
+  area.style.opacity = "0";
+  document.body.append(area);
+  area.select();
+  area.setSelectionRange(0, text.length);
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  area.remove();
+  return copied;
+}
+
+function parseItemDetail(body: string): SnapshotItemDetail | null {
+  try {
+    const value = JSON.parse(body) as unknown;
+    if (
+      !isRecord(value)
+      || typeof value.id !== "string"
+      || typeof value.title !== "string"
+      || typeof value.text !== "string"
+      || !isFiniteNumber(value.chars)
+    ) {
+      return null;
+    }
+    return value as unknown as SnapshotItemDetail;
+  } catch {
+    return null;
+  }
 }
 
 function renderSummary(next: SnapshotSummary): void {
@@ -714,12 +1133,13 @@ function renderSummary(next: SnapshotSummary): void {
   mapSignature = signature;
   renderMap(next);
   if (
-    selectedCategory
+    !preview
+    && selectedCategory
     && (!currentLayout || currentLayout.cellsByCategory[selectedCategory].length === 0)
   ) {
     selectedCategory = null;
   }
-  renderBreakdown();
+  if (!preview) renderBreakdown();
   applySelection();
 }
 
@@ -788,11 +1208,21 @@ function setSession(next: SessionSnapshot | null): void {
   cellElements.clear();
   hoveredCell = null;
   pinnedCell = null;
+  preview = null;
+  previewRequest += 1;
+  summaryRequest += 1;
+  focusedItemId = null;
+  focusedItemFallback = 0;
+  itemButtons = [];
+  notice = null;
+  resetCopyFeedback();
+  breakdownBody.replaceChildren();
   hideTooltip();
   renderContent();
 }
 
 async function refreshSummary(): Promise<void> {
+  const request = ++summaryRequest;
   const current = session;
   if (!current) {
     summary = null;
@@ -807,7 +1237,7 @@ async function refreshSummary(): Promise<void> {
       path: "/summary",
       query: { sessionID: requestedSession },
     });
-    if (session?.id !== requestedSession) return;
+    if (session?.id !== requestedSession || request !== summaryRequest) return;
 
     if (result.status === 200) {
       const parsed = parseSummary(result.body);
@@ -819,7 +1249,7 @@ async function refreshSummary(): Promise<void> {
     summary = null;
     summaryProblem = result.status !== 404;
   } catch {
-    if (session?.id !== requestedSession) return;
+    if (session?.id !== requestedSession || request !== summaryRequest) return;
     summary = null;
     summaryProblem = true;
   }
