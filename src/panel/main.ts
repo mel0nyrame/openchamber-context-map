@@ -276,7 +276,14 @@ const assumedBadge = mountBadge(assumedSlot, {
   label: t(currentLocale, "assumedWindowBadge"),
   tone: "info",
 });
-usageBadges.append(estimatedSlot, assumedSlot);
+const baselineSlot = document.createElement("span");
+baselineSlot.hidden = true;
+baselineSlot.title = t(currentLocale, "baselineTitle");
+const baselineBadge = mountBadge(baselineSlot, {
+  label: t(currentLocale, "baselineBadge"),
+  tone: "info",
+});
+usageBadges.append(estimatedSlot, assumedSlot, baselineSlot);
 usageHead.append(usageTitle, usageBadges);
 
 const usageModel = document.createElement("div");
@@ -602,6 +609,8 @@ function renderStaticCopy(): void {
   estimatedBadge.update({ label: t(currentLocale, "estimatedBadge") });
   assumedSlot.title = t(currentLocale, "assumedWindowTitle");
   assumedBadge.update({ label: t(currentLocale, "assumedWindowBadge") });
+  baselineSlot.title = t(currentLocale, "baselineTitle");
+  baselineBadge.update({ label: t(currentLocale, "baselineBadge") });
   mapTitle.textContent = t(currentLocale, "mapTitle");
   mapHint.textContent = t(currentLocale, "mapHint");
   mapGrid.setAttribute("aria-label", t(currentLocale, "mapAria"));
@@ -1376,6 +1385,7 @@ function renderSummary(next: SnapshotSummary): void {
 
   estimatedSlot.hidden = !next.estimated;
   assumedSlot.hidden = !next.windowAssumed;
+  baselineSlot.hidden = !next.baseline;
 
   const signature = snapshotSignature(next);
   if (signature === mapSignature) return;

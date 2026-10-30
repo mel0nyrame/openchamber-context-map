@@ -3,8 +3,10 @@ import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { BaselineStore, baselineKey } from "../src/collector/baseline.ts";
 import collector from "../src/collector/main.ts";
 import type { SessionContext } from "../src/collector/opencode.ts";
+import { baselineDraft, buildDraft } from "../src/collector/snapshot.ts";
 import { CATEGORIES, type Category, type SnapshotSummary } from "../src/shared/types.ts";
 
 type HookCallback = (context: SessionContext) => void | Promise<void>;
@@ -16,11 +18,13 @@ interface FakeSession {
     options?: unknown,
   ) => Promise<{ dispose: () => Promise<void> }>;
   context: (input: { sessionID: string }) => Promise<unknown>;
+  get: (input: { sessionID: string }) => Promise<unknown>;
 }
 
 interface FakeOptions {
   models?: Array<{ providerID: string; modelID: string; limit: { context: number } }>;
   history?: Record<string, unknown[]>;
+  sessions?: Record<string, { agent?: string; model?: { providerID: string; modelID: string } }>;
 }
 
 function fakeContext(options: FakeOptions = {}) {
@@ -38,6 +42,7 @@ function fakeContext(options: FakeOptions = {}) {
       };
     },
     context: async ({ sessionID }) => history.get(sessionID) ?? [],
+    get: async ({ sessionID }) => options.sessions?.[sessionID] ?? null,
   };
 
   const model = {
@@ -126,6 +131,7 @@ async function waitForSummary(
 function baseContext(sessionID = "session-1"): SessionContext {
   return {
     sessionID,
+    agent: "build",
     model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
     system: [{ type: "text", text: "S".repeat(400) }],
     tools: {},
@@ -507,6 +513,105 @@ test("快照被替换后旧 itemId 返回 404", async () => {
     { headers: auth(token) },
   );
   expect(response.status).toBe(404);
+});
+
+test("基线模板按 agent + model 选键，只保留 system 与工具定义，最多 5 个", () => {
+  const ref = { providerID: "anthropic", modelID: "claude-sonnet-4-5" };
+  const context = baseContext();
+  context.messages = [{ role: "user", content: [{ type: "text", text: "not baseline" }] }];
+  const draft = baselineDraft(buildDraft(context, "2026-01-01T00:00:00.000Z"));
+
+  expect(baselineKey("build", ref)).toBe("build\u0000anthropic/claude-sonnet-4-5");
+  expect(draft.items.every((item) => item.category === "system" || item.category === "toolDefinitions"))
+    .toBe(true);
+  expect(draft.items.some((item) => item.category === "userMessages")).toBe(false);
+  expect(draft.counts.userMessages).toBe(0);
+
+  const store = new BaselineStore();
+  store.remember("build", draft);
+  expect(store.get("build", ref)?.items).toEqual(draft.items);
+  expect(store.get("plan", ref)).toBeUndefined();
+  expect(store.get("build", { ...ref, modelID: "other" })).toBeUndefined();
+
+  for (let index = 0; index < 6; index += 1) {
+    store.remember("build", {
+      ...draft,
+      modelRef: { providerID: "anthropic", modelID: `model-${index}` },
+    });
+  }
+  expect(store.size).toBe(5);
+  expect(store.get("build", { providerID: "anthropic", modelID: "model-0" })).toBeUndefined();
+  expect(store.get("build", { providerID: "anthropic", modelID: "model-5" })).toBeDefined();
+});
+
+test("没有真实快照时用模板返回 baseline，item 可预览，真实请求后消失", async () => {
+  const ref = { providerID: "anthropic", modelID: "claude-sonnet-4-5" };
+  const { port, token, fake } = await startCollector({
+    models: MODELS,
+    sessions: { "session-new": { agent: "build", model: ref } },
+  });
+
+  const context = baseContext("session-1");
+  context.tools = {
+    read: { description: "D".repeat(100), input: { type: "object" } },
+  };
+  context.messages = [{ role: "user", content: [{ type: "text", text: "not baseline" }] }];
+  await fake.fire(context);
+
+  const response = await fetch(
+    `http://127.0.0.1:${port}/summary?sessionID=session-new`,
+    { headers: auth(token) },
+  );
+  expect(response.status).toBe(200);
+  const baseline = (await response.json()) as SnapshotSummary;
+
+  expect(baseline.baseline).toBe(true);
+  expect(baseline.estimated).toBe(true);
+  expect(baseline.model).toBe("anthropic/claude-sonnet-4-5");
+  expect(baseline.window).toBe(150_000);
+  expect(baseline.windowAssumed).toBe(false);
+  expect(baseline.categories.map((entry) => entry.category)).toEqual(["system", "toolDefinitions"]);
+  expect(baseline.used).toBe(baseline.categories.reduce((sum, entry) => sum + entry.tokens, 0));
+  expect(baseline.items.every((item) => !item.id.includes("@"))).toBe(true);
+  expect(baseline.items.some((item) => item.id.startsWith("userMessages"))).toBe(false);
+
+  const item = await fetch(
+    `http://127.0.0.1:${port}/item?sessionID=session-new&itemId=system:0`,
+    { headers: auth(token) },
+  );
+  expect(item.status).toBe(200);
+  expect((await item.json() as { text: string }).text).toBe("S".repeat(400));
+
+  await fake.fire(baseContext("session-new"));
+  const real = await waitForSummary(port, token, "session-new", (value) => value.used > 0);
+  expect(real.baseline).toBe(false);
+  expect(real.categories.map((entry) => entry.category)).toEqual([...CATEGORIES]);
+});
+
+test("找不到模板时 /summary 与 /item 仍返回 404", async () => {
+  const { port, token, fake } = await startCollector({
+    models: MODELS,
+    sessions: {
+      "session-other": {
+        agent: "plan",
+        model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
+      },
+    },
+  });
+
+  await fake.fire(baseContext("session-1"));
+
+  const summary = await fetch(
+    `http://127.0.0.1:${port}/summary?sessionID=session-other`,
+    { headers: auth(token) },
+  );
+  expect(summary.status).toBe(404);
+
+  const item = await fetch(
+    `http://127.0.0.1:${port}/item?sessionID=session-other&itemId=system:0`,
+    { headers: auth(token) },
+  );
+  expect(item.status).toBe(404);
 });
 
 test("Collector dispose 关闭服务、删除 discovery 文件并释放 hook", async () => {
