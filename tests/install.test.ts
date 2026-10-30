@@ -19,6 +19,8 @@ test("只跳过父进程为 bun install 的调用，不跳过 bun run install", 
   expect(isBunInstallCommand("/opt/homebrew/bin/bun install --frozen-lockfile")).toBe(true);
   expect(isBunInstallCommand("bun run install")).toBe(false);
   expect(isBunInstallCommand("/opt/homebrew/bin/bun run install")).toBe(false);
+  expect(isBunInstallCommand("bun --cwd . install")).toBe(true);
+  expect(isBunInstallCommand("bun install && bun run build")).toBe(true);
   expect(isBunInstallCommand("npm install")).toBe(false);
   expect(isBunInstallCommand(null)).toBe(false);
   expect(isBunInstallCommand("")).toBe(false);

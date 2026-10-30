@@ -11,7 +11,13 @@ export const EXTENSION_GUEST_ID = "context-map";
 export function isBunInstallCommand(command: string | null | undefined): boolean {
   if (!command) return false;
   const firstLine = command.trim().split(/\r?\n/, 1)[0]?.trim() ?? "";
-  return /\bbun(?:\.exe)?\s+install\b/.test(firstLine);
+  const tokens = firstLine.split(/\s+/);
+  const binary = tokens[0]?.split("/").at(-1) ?? "";
+  if (binary !== "bun" && binary !== "bun.exe") return false;
+  // `bun run install` 是脚本入口，不能跳过；其余带 install 子命令的调用是装依赖。
+  const installAt = tokens.indexOf("install");
+  const runAt = tokens.indexOf("run");
+  return installAt !== -1 && (runAt === -1 || runAt > installAt);
 }
 
 /** Collector 复制文件的第一行标记，用来区分本工具生成的文件与用户自己的插件。 */
