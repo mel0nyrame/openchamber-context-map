@@ -9,6 +9,8 @@ import {
   type SnapshotItemDetail,
   type SnapshotSummary,
 } from "../shared/types.ts";
+import { COLLECTOR_VERSION } from "../shared/version.ts";
+import { describeHostFailure, type HostFailureCopy } from "./failure.ts";
 import { CATEGORY_LABELS } from "./labels.ts";
 import {
   buildBreakdown,
@@ -167,12 +169,15 @@ const STYLE = `
     border-radius: var(--oc-radius); background: color-mix(in srgb, var(--oc-fg) 3%, transparent); }
   .placeholder-title { font-weight: 600; }
   .placeholder-detail { color: var(--oc-muted); font-size: 11px; }
+  .placeholder-actions { margin-top: 6px; }
   [hidden] { display: none !important; }
 `;
 
+const COLLECTOR_INSTALL_PATH = "~/.config/opencode/plugins/";
+
 type PanelState =
   | { kind: "checking" }
-  | { kind: "connected"; version: string }
+  | { kind: "connected"; version: string; outdated?: boolean; expectedVersion?: string }
   | { kind: "disconnected"; reason: "not_found" | "unreachable" }
   | { kind: "failed"; title: string; detail: string };
 
@@ -181,6 +186,8 @@ interface HealthBody {
     connected?: unknown;
     version?: unknown;
     reason?: unknown;
+    outdated?: unknown;
+    expectedVersion?: unknown;
   };
 }
 
@@ -225,6 +232,14 @@ const banner = mountBanner(bannerSlot, {
   title: "刷新失败",
   body: "",
   action: { label: "重试", onClick: () => manualRefresh() },
+});
+
+const versionSlot = document.createElement("div");
+versionSlot.hidden = true;
+const versionBanner = mountBanner(versionSlot, {
+  tone: "warning",
+  title: "collector 版本过旧",
+  body: "",
 });
 
 const usage = document.createElement("section");
@@ -367,7 +382,16 @@ const placeholderTitle = document.createElement("div");
 placeholderTitle.className = "placeholder-title";
 const placeholderDetail = document.createElement("div");
 placeholderDetail.className = "placeholder-detail";
-placeholder.append(placeholderTitle, placeholderDetail);
+const placeholderActions = document.createElement("div");
+placeholderActions.className = "placeholder-actions";
+placeholderActions.hidden = true;
+const placeholderRetry = mountButton(placeholderActions, {
+  label: "重试",
+  variant: "outline",
+  size: "xs",
+  onClick: () => manualRefresh(),
+});
+placeholder.append(placeholderTitle, placeholderDetail, placeholderActions);
 
 const status = document.createElement("div");
 status.className = "status";
@@ -383,13 +407,16 @@ statusDetail.className = "status-detail";
 statusText.append(statusTitle, statusDetail);
 status.append(dot, statusText);
 
-root.append(head, bannerSlot, usage, mapCard, breakdownCard, placeholder, status);
+root.append(head, bannerSlot, versionSlot, usage, mapCard, breakdownCard, placeholder, status);
 
 let session: SessionSnapshot | null = null;
 let connected = false;
 let booted = false;
 let summary: SnapshotSummary | null = null;
 let summaryProblem = false;
+let hostProblem: HostFailureCopy | null = null;
+let collectorReason: "not_found" | "unreachable" | null = null;
+let collectorOutdated: { version: string; expectedVersion: string } | null = null;
 let refreshState: RefreshState = initialRefreshState(document.visibilityState !== "hidden");
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshInFlight = false;
@@ -502,39 +529,49 @@ function renderStatus(state: PanelState): void {
   }
   if (state.kind === "connected") {
     statusTitle.textContent = `Collector 已连接 · ${versionLabel(state.version)}`;
-    statusDetail.textContent = "快照会通过本地 Service 读取，bearer 不会进入面板。";
+    statusDetail.textContent = state.outdated
+      ? `Collector 版本过旧，扩展期望 ${versionLabel(state.expectedVersion ?? COLLECTOR_VERSION)}。`
+      : "快照会通过本地 Service 读取，bearer 不会进入面板。";
     return;
   }
   if (state.kind === "disconnected") {
-    statusTitle.textContent = "Collector 未连接";
-    statusDetail.textContent = state.reason === "not_found"
-      ? "未找到采集器。启动 OpenCode 后会自动连接。"
-      : "采集器没有响应。重启 OpenCode 后再试。";
+    if (state.reason === "unreachable") {
+      statusTitle.textContent = "Collector 没有响应";
+      statusDetail.textContent = "发现文件存在，但 Collector 没有响应。重启 OpenCode 后再试。";
+    } else {
+      statusTitle.textContent = "Collector 未运行";
+      statusDetail.textContent = `没有找到 Discovery file。把 Collector 安装到 ${COLLECTOR_INSTALL_PATH} 后重启 OpenCode。`;
+    }
     return;
   }
   statusTitle.textContent = state.title;
   statusDetail.textContent = state.detail;
 }
 
-function failureOf(error: unknown): { title: string; detail: string } {
-  if (error instanceof HostRequestError) {
-    if (error.code === "NO_SERVICE" || error.code === "NOT_GRANTED") {
-      return {
-        title: "本地 Service 未连接",
-        detail: "在设置 → 扩展中允许 Context Map 的本地服务。",
-      };
-    }
-    if (error.code === "DISABLED") {
-      return { title: "Context Map 已暂停", detail: "在设置 → 扩展中重新启用。" };
-    }
-    if (error.code === "SERVICE_FAILED") {
-      return { title: "本地 Service 已停止", detail: "它会在下次刷新时自动重启。" };
-    }
-  }
-  return { title: "无法连接本地 Service", detail: "请确认 OpenChamber 正在运行。" };
+function failureOf(error: unknown): HostFailureCopy {
+  return describeHostFailure(error instanceof HostRequestError ? error.code : null);
 }
 
-function showPlaceholder(headline: string, detail: string): void {
+/** 这些 host 错误会改变面板的可用性，即使有旧数据也要直接显示。 */
+function isBlockingHostFailure(error: unknown): boolean {
+  return error instanceof HostRequestError
+    && (error.code === "NO_SERVICE"
+      || error.code === "NOT_GRANTED"
+      || error.code === "DISABLED"
+      || error.code === "SERVICE_FAILED");
+}
+
+function renderVersionBanner(): void {
+  versionSlot.hidden = collectorOutdated === null;
+  if (collectorOutdated === null) return;
+  versionBanner.update({
+    tone: "warning",
+    title: "collector 版本过旧",
+    body: `Collector 运行 ${versionLabel(collectorOutdated.version)}，扩展期望 ${versionLabel(collectorOutdated.expectedVersion)}。请手动更新 Collector；不会自动更新。`,
+  });
+}
+
+function showPlaceholder(headline: string, detail: string, retry = false): void {
   usage.hidden = true;
   mapCard.hidden = true;
   breakdownCard.hidden = true;
@@ -553,28 +590,51 @@ function showPlaceholder(headline: string, detail: string): void {
   placeholder.hidden = false;
   placeholderTitle.textContent = headline;
   placeholderDetail.textContent = detail;
+  placeholderActions.hidden = !retry;
+  syncRetryControls();
 }
 
 function renderContent(): void {
   renderUpdated();
+  renderVersionBanner();
   if (!booted) {
     showPlaceholder("正在连接 Collector…", "首次打开面板时，本地 Service 可能需要一点时间启动。");
     return;
   }
   if (!session) {
-    showPlaceholder("未打开 session", "打开一个 session 后，这里会显示它的上下文占用。");
+    showPlaceholder("没有打开的 session", "打开一个 session 后，这里会显示它的上下文占用。", true);
+    return;
+  }
+  if (hostProblem !== null) {
+    showPlaceholder(hostProblem.title, hostProblem.detail, true);
     return;
   }
   if (!connected) {
-    showPlaceholder("快照暂不可用", "Collector 连接后会自动显示上下文占用。");
+    if (collectorReason === "unreachable") {
+      showPlaceholder(
+        "Collector 没有响应",
+        "发现文件存在，但 Collector 没有响应。重启 OpenCode 后再试。",
+        true,
+      );
+    } else {
+      showPlaceholder(
+        "Collector 未运行",
+        `没有找到 Discovery file。把 Collector 安装到 ${COLLECTOR_INSTALL_PATH} 后重启 OpenCode。`,
+        true,
+      );
+    }
     return;
   }
   if (summaryProblem) {
-    showPlaceholder("快照暂时不可用", "Collector 没有及时响应，稍后会自动重试。");
+    showPlaceholder("快照暂时不可用", "Collector 没有及时响应，稍后会自动重试。", true);
     return;
   }
   if (!summary || summary.sessionID !== session.id) {
-    showPlaceholder("还没有上下文快照", "发起一次请求后，这里会显示最后一次请求的构成。");
+    showPlaceholder(
+      "还没有请求记录",
+      "Collector 已连接。在当前 session 发起一次请求后，这里会显示最后一次请求的构成。",
+      true,
+    );
     return;
   }
   renderSummary(summary);
@@ -1323,13 +1383,32 @@ function stopPollTimer(): void {
 function renderRefreshBanner(): void {
   const next = refreshBanner(refreshState);
   bannerSlot.hidden = next === null;
-  if (next !== null) banner.update(next);
+  if (next !== null) {
+    // 请求在途时收起 banner 的重试入口，避免和顶部/占位区按钮重复触发。
+    banner.update({
+      ...next,
+      action: manualLoading || refreshInFlight
+        ? undefined
+        : { label: "重试", onClick: () => manualRefresh() },
+    });
+  }
+}
+
+function syncRetryControls(): void {
+  const busy = manualLoading || refreshInFlight;
+  refreshButton.update({ disabled: busy, loading: manualLoading });
+  placeholderRetry.update({
+    disabled: busy,
+    loading: manualLoading,
+    label: manualLoading ? "重试中…" : "重试",
+  });
+  renderRefreshBanner();
 }
 
 function setManualLoading(loading: boolean): void {
   if (manualLoading === loading) return;
   manualLoading = loading;
-  refreshButton.update({ loading });
+  syncRetryControls();
 }
 
 /**
@@ -1355,8 +1434,8 @@ function reconcilePolling(): void {
 
 function manualRefresh(): void {
   if (!started || manualLoading) return;
-  setManualLoading(true);
-  requestRefresh("manual", true);
+  // 在途时排队而不是叠加：连续点击只会留下一次手动刷新。
+  requestRefresh("manual");
 }
 
 function requestRefresh(trigger: RefreshTrigger, supersede = false): void {
@@ -1373,7 +1452,11 @@ async function runRefresh(trigger: RefreshTrigger): Promise<void> {
   // 首次加载和手动刷新要显示失败；之后的单次轮询/事件失败静默保留旧内容。
   const quiet = trigger !== "manual" && booted;
   refreshInFlight = true;
-  if (trigger === "manual") setManualLoading(true);
+  if (trigger === "manual") {
+    setManualLoading(true);
+  } else {
+    syncRetryControls();
+  }
 
   let ok = false;
   try {
@@ -1385,7 +1468,11 @@ async function runRefresh(trigger: RefreshTrigger): Promise<void> {
     if (token !== refreshToken) return;
 
     refreshInFlight = false;
-    if (trigger === "manual") setManualLoading(false);
+    if (trigger === "manual") {
+      setManualLoading(false);
+    } else {
+      syncRetryControls();
+    }
     // 请求期间切走了 session：这次结果属于上一个 session，不计数也不清计数。
     if (refreshState.sessionID === sessionAtStart) {
       refreshState = ok ? refreshSucceeded(refreshState) : refreshFailed(refreshState, trigger);
@@ -1404,17 +1491,18 @@ async function runRefresh(trigger: RefreshTrigger): Promise<void> {
 
 function noteUnreachable(error: unknown, unexpected = false): void {
   booted = true;
-  // 已经有数据时静默保留，连续失败由 banner 统一提示。
-  if (summary !== null || connected) return;
+  // 已经有数据时静默保留，连续失败由 banner 统一提示；
+  // 但 host 明确不可用（未授权、暂停、Service 停止）时直接替换内容。
+  if (!isBlockingHostFailure(error) && (summary !== null || connected)) return;
 
   connected = false;
   summaryProblem = false;
-  renderStatus({
-    kind: "failed",
-    ...(unexpected
-      ? { title: "本地 Service 返回了意外结果", detail: "请稍后重试，或重新加载面板。" }
-      : failureOf(error)),
-  });
+  collectorReason = null;
+  collectorOutdated = null;
+  hostProblem = unexpected
+    ? { title: "Service 返回了意外结果", detail: "请稍后重试，或重新加载面板。" }
+    : failureOf(error);
+  renderStatus({ kind: "failed", ...hostProblem });
   renderContent();
 }
 
@@ -1443,21 +1531,33 @@ async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
   }
 
   const collector = body.collector;
+  hostProblem = null;
   if (collector.connected !== true || typeof collector.version !== "string") {
     connected = false;
     summary = null;
     summaryProblem = false;
+    collectorOutdated = null;
+    collectorReason = collector.reason === "unreachable" ? "unreachable" : "not_found";
     booted = true;
-    renderStatus({
-      kind: "disconnected",
-      reason: collector.reason === "unreachable" ? "unreachable" : "not_found",
-    });
+    renderStatus({ kind: "disconnected", reason: collectorReason });
     renderContent();
     return true;
   }
 
   connected = true;
-  renderStatus({ kind: "connected", version: collector.version });
+  collectorReason = null;
+  const expectedVersion = typeof collector.expectedVersion === "string"
+    ? collector.expectedVersion
+    : COLLECTOR_VERSION;
+  collectorOutdated = collector.outdated === true
+    ? { version: collector.version, expectedVersion }
+    : null;
+  renderStatus({
+    kind: "connected",
+    version: collector.version,
+    outdated: collectorOutdated !== null,
+    expectedVersion: collectorOutdated?.expectedVersion,
+  });
 
   const current = session;
   if (!current) {
