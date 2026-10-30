@@ -62,12 +62,7 @@ const STYLE = `
     clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   html, body { height: 100%; overflow-y: auto; overflow-x: hidden; }
   #root { display: flex; flex-direction: column; gap: 14px; padding: 12px 12px 20px; }
-  .head { display: flex; flex-direction: column; gap: 2px; }
-  .head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .head-actions { flex: none; display: flex; align-items: center; gap: 6px; }
-  .title { font-size: 13px; font-weight: 600; }
-  .subtitle { color: var(--oc-muted); font-size: 11px; }
-  .updated { color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .updated { color: var(--oc-muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
   .usage, .card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--oc-radius);
     background: color-mix(in srgb, var(--oc-fg) 4%, transparent); }
   .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-height: 18px; }
@@ -161,22 +156,22 @@ const STYLE = `
   }
   .usage-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .usage-title { font-weight: 600; }
-  .usage-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+  .usage-actions { display: flex; align-items: center; gap: 6px; }
+  .usage-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+  .status-inline { display: inline-flex; align-items: center; gap: 4px; color: var(--oc-muted);
+    font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  .status-inline .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--oc-muted); }
+  .status-inline[data-state="connected"] .dot { background: var(--oc-success); }
+  .status-inline[data-state="disconnected"] .dot { background: var(--oc-warning, #d97706); }
+  .status-inline[data-state="failed"] .dot { background: var(--oc-error); }
+  .refresh-slot { display: inline-flex; }
+  .refresh-slot .oc-sdk-btn { min-width: 24px; padding: 2px 6px; }
   .usage-model { color: var(--oc-muted); font-family: var(--oc-mono); font-size: 11px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .usage-meter { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .usage-numbers { font-variant-numeric: tabular-nums; }
   .usage-window { color: var(--oc-muted); }
   .usage-pct { font-weight: 600; font-variant-numeric: tabular-nums; }
-  .status { display: flex; align-items: flex-start; gap: 8px; padding: 12px; border-radius: var(--oc-radius);
-    background: color-mix(in srgb, var(--oc-fg) 4%, transparent); }
-  .dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--oc-muted); }
-  .status[data-state="connected"] .dot { background: var(--oc-success); }
-  .status[data-state="disconnected"] .dot { background: var(--oc-warning, #d97706); }
-  .status[data-state="failed"] .dot { background: var(--oc-error); }
-  .status-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .status-title { font-weight: 600; }
-  .status-detail { color: var(--oc-muted); font-size: 11px; }
   .placeholder { display: flex; flex-direction: column; gap: 4px; padding: 18px 12px;
     border-radius: var(--oc-radius); background: color-mix(in srgb, var(--oc-fg) 3%, transparent); }
   .placeholder-title { font-weight: 600; }
@@ -215,30 +210,6 @@ const palette = document.createElement("style");
 palette.textContent = paletteCss();
 document.head.append(style, palette);
 
-const head = document.createElement("div");
-head.className = "head";
-const headRow = document.createElement("div");
-headRow.className = "head-row";
-const title = document.createElement("div");
-title.className = "title";
-title.textContent = t(currentLocale, "mapTitle");
-const headActions = document.createElement("div");
-headActions.className = "head-actions";
-const refreshButton = mountButton(headActions, {
-  label: t(currentLocale, "refresh"),
-  variant: "outline",
-  size: "xs",
-  onClick: () => manualRefresh(),
-});
-const subtitle = document.createElement("div");
-subtitle.className = "subtitle";
-subtitle.textContent = t(currentLocale, "panelSubtitle");
-const updated = document.createElement("div");
-updated.className = "updated";
-updated.hidden = true;
-headRow.append(title, headActions);
-head.append(headRow, subtitle, updated);
-
 const bannerSlot = document.createElement("div");
 bannerSlot.hidden = true;
 const banner = mountBanner(bannerSlot, {
@@ -258,12 +229,35 @@ const versionBanner = mountBanner(versionSlot, {
 
 const usage = document.createElement("section");
 usage.className = "usage";
-usage.hidden = true;
 const usageHead = document.createElement("div");
 usageHead.className = "usage-head";
 const usageTitle = document.createElement("div");
 usageTitle.className = "usage-title";
 usageTitle.textContent = t(currentLocale, "usageTitle");
+const usageActions = document.createElement("div");
+usageActions.className = "usage-actions";
+const statusInline = document.createElement("span");
+statusInline.className = "status-inline";
+statusInline.dataset.state = "checking";
+statusInline.setAttribute("role", "status");
+statusInline.setAttribute("aria-live", "polite");
+const dot = document.createElement("span");
+dot.className = "dot";
+dot.setAttribute("aria-hidden", "true");
+const statusVersion = document.createElement("span");
+statusVersion.className = "status-version";
+statusInline.append(dot, statusVersion);
+const refreshSlot = document.createElement("span");
+refreshSlot.className = "refresh-slot";
+const refreshButton = mountButton(refreshSlot, {
+  label: "↻",
+  variant: "ghost",
+  size: "xs",
+  onClick: () => manualRefresh(),
+});
+const refreshNode = refreshSlot.querySelector<HTMLButtonElement>("button");
+refreshNode?.setAttribute("aria-label", t(currentLocale, "refresh"));
+refreshNode?.setAttribute("title", t(currentLocale, "refresh"));
 const usageBadges = document.createElement("div");
 usageBadges.className = "usage-badges";
 const estimatedSlot = document.createElement("span");
@@ -288,7 +282,8 @@ const baselineBadge = mountBadge(baselineSlot, {
   tone: "info",
 });
 usageBadges.append(estimatedSlot, assumedSlot, baselineSlot);
-usageHead.append(usageTitle, usageBadges);
+usageActions.append(statusInline, refreshSlot);
+usageHead.append(usageTitle, usageActions);
 
 const usageModel = document.createElement("div");
 usageModel.className = "usage-model";
@@ -299,7 +294,12 @@ usageNumbers.className = "usage-numbers";
 const usageUsed = document.createElement("span");
 const usageWindow = document.createElement("span");
 usageWindow.className = "usage-window";
-usageNumbers.append(usageUsed, document.createTextNode(" / "), usageWindow, document.createTextNode(" tokens"));
+usageNumbers.append(
+  usageUsed,
+  document.createTextNode(" / "),
+  usageWindow,
+  document.createTextNode(` ${t(currentLocale, "tokensUnit")}`),
+);
 const usagePct = document.createElement("div");
 usagePct.className = "usage-pct";
 usageMeter.append(usageNumbers, usagePct);
@@ -309,8 +309,11 @@ const progress = mountProgress(usageProgress, {
   value: 0,
   label: t(currentLocale, "usedLabel"),
 });
+const updated = document.createElement("div");
+updated.className = "updated";
+updated.hidden = true;
 
-usage.append(usageHead, usageModel, usageMeter, usageProgress);
+usage.append(usageHead, usageModel, usageBadges, usageMeter, usageProgress, updated);
 
 const mapCard = document.createElement("section");
 mapCard.className = "card map-card";
@@ -425,21 +428,7 @@ const placeholderRetry = mountButton(placeholderActions, {
 });
 placeholder.append(placeholderTitle, placeholderDetail, placeholderActions);
 
-const status = document.createElement("div");
-status.className = "status";
-status.dataset.state = "checking";
-const dot = document.createElement("span");
-dot.className = "dot";
-const statusText = document.createElement("div");
-statusText.className = "status-text";
-const statusTitle = document.createElement("div");
-statusTitle.className = "status-title";
-const statusDetail = document.createElement("div");
-statusDetail.className = "status-detail";
-statusText.append(statusTitle, statusDetail);
-status.append(dot, statusText);
-
-root.append(head, bannerSlot, versionSlot, usage, mapCard, breakdownCard, placeholder, status);
+root.append(bannerSlot, versionSlot, usage, mapCard, breakdownCard, placeholder);
 
 let panelState: PanelState = { kind: "checking" };
 let session: SessionSnapshot | null = null;
@@ -594,43 +583,49 @@ function versionLabel(version: string): string {
 
 function renderStatus(state: PanelState): void {
   panelState = state;
-  status.dataset.state = state.kind;
+  statusInline.dataset.state = state.kind;
+  let title: string;
+  let detail: string;
+  let version: string;
   if (state.kind === "checking") {
-    statusTitle.textContent = t(currentLocale, "statusCheckingTitle");
-    statusDetail.textContent = t(currentLocale, "statusCheckingDetail");
-    return;
-  }
-  if (state.kind === "connected") {
-    statusTitle.textContent = t(currentLocale, "statusConnectedTitle", {
+    title = t(currentLocale, "statusCheckingTitle");
+    detail = t(currentLocale, "statusCheckingDetail");
+    version = "…";
+  } else if (state.kind === "connected") {
+    title = t(currentLocale, "statusConnectedTitle", {
       version: versionLabel(state.version),
     });
-    statusDetail.textContent = state.outdated
+    detail = state.outdated
       ? t(currentLocale, "statusOutdatedDetail", {
         expected: versionLabel(state.expectedVersion ?? COLLECTOR_VERSION),
       })
       : t(currentLocale, "statusConnectedDetail");
-    return;
-  }
-  if (state.kind === "disconnected") {
+    version = versionLabel(state.version);
+  } else if (state.kind === "disconnected") {
     if (state.reason === "unreachable") {
-      statusTitle.textContent = t(currentLocale, "collectorUnreachableTitle");
-      statusDetail.textContent = t(currentLocale, "collectorUnreachableDetail");
+      title = t(currentLocale, "collectorUnreachableTitle");
+      detail = t(currentLocale, "collectorUnreachableDetail");
     } else {
-      statusTitle.textContent = t(currentLocale, "collectorNotRunning");
-      statusDetail.textContent = t(currentLocale, "collectorNotRunningDetail", {
+      title = t(currentLocale, "collectorNotRunning");
+      detail = t(currentLocale, "collectorNotRunningDetail", {
         path: COLLECTOR_INSTALL_PATH,
       });
     }
-    return;
+    version = "—";
+  } else {
+    title = t(currentLocale, state.titleKey);
+    detail = t(currentLocale, state.detailKey);
+    version = "—";
   }
-  statusTitle.textContent = t(currentLocale, state.titleKey);
-  statusDetail.textContent = t(currentLocale, state.detailKey);
+  statusVersion.textContent = version;
+  const full = `${title} · ${detail}`;
+  statusInline.title = full;
+  statusInline.setAttribute("aria-label", full);
 }
 
 function renderStaticCopy(): void {
-  title.textContent = t(currentLocale, "mapTitle");
-  subtitle.textContent = t(currentLocale, "panelSubtitle");
-  refreshButton.update({ label: t(currentLocale, "refresh") });
+  refreshNode?.setAttribute("aria-label", t(currentLocale, "refresh"));
+  refreshNode?.setAttribute("title", t(currentLocale, "refresh"));
   usageTitle.textContent = t(currentLocale, "usageTitle");
   estimatedSlot.title = t(currentLocale, "estimatedTitle");
   estimatedBadge.update({ label: t(currentLocale, "estimatedBadge") });
@@ -681,7 +676,12 @@ function renderVersionBanner(): void {
 }
 
 function showPlaceholder(headline: string, detail: string, retry = false): void {
-  usage.hidden = true;
+  usage.hidden = false;
+  usageModel.hidden = true;
+  usageBadges.hidden = true;
+  usageMeter.hidden = true;
+  usageProgress.hidden = true;
+  updated.hidden = true;
   mapCard.hidden = true;
   breakdownCard.hidden = true;
   mapSignature = null;
@@ -770,6 +770,12 @@ function renderContent(): void {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat(currentLocale === "zh" ? "zh-CN" : "en-US").format(value);
+}
+
+function itemCountLabel(count: number): string {
+  return count === 1
+    ? t(currentLocale, "itemCountOne")
+    : t(currentLocale, "itemCountMany", { items: formatNumber(count) });
 }
 
 function formatPercent(value: number): string {
@@ -882,7 +888,9 @@ function cellLabel(cell: MapCell): string {
   return cell.segments
     .map(
       (segment) =>
-        `${categoryLabel(segment.category)} ${formatNumber(Math.round(segment.tokens))} tokens`,
+        `${categoryLabel(segment.category)} ${t(currentLocale, "tokenCount", {
+          tokens: formatNumber(Math.round(segment.tokens)),
+        })}`,
     )
     .join(t(currentLocale, "listSeparator"));
 }
@@ -964,7 +972,9 @@ function showTooltip(cell: MapCell, element: HTMLButtonElement): void {
     name.textContent = t(currentLocale, "freeSpace");
     const tokens = document.createElement("span");
     tokens.className = "tip-tokens";
-    tokens.textContent = `${formatNumber(currentFreeTokens)} tokens`;
+    tokens.textContent = t(currentLocale, "tokenCount", {
+      tokens: formatNumber(currentFreeTokens),
+    });
     row.append(dot, name, tokens);
     fragment.append(row);
     mapHint.textContent = t(currentLocale, "freeCellLabel", {
@@ -981,16 +991,20 @@ function showTooltip(cell: MapCell, element: HTMLButtonElement): void {
       name.textContent = categoryLabel(segment.category);
       const tokens = document.createElement("span");
       tokens.className = "tip-tokens";
-      tokens.textContent = `${formatNumber(Math.round(segment.tokens))} tokens`;
+      tokens.textContent = t(currentLocale, "tokenCount", {
+        tokens: formatNumber(Math.round(segment.tokens)),
+      });
       row.append(dot, name, tokens);
       fragment.append(row);
     }
     mapHint.textContent = cell.segments
       .map(
         (segment) =>
-          `${categoryLabel(segment.category)} ${formatNumber(Math.round(segment.tokens))}`,
+          `${categoryLabel(segment.category)} ${t(currentLocale, "tokenCount", {
+            tokens: formatNumber(Math.round(segment.tokens)),
+          })}`,
       )
-      .join(" · ");
+      .join(t(currentLocale, "listSeparator"));
   }
   mapTip.replaceChildren(fragment);
   mapTip.hidden = false;
@@ -1166,10 +1180,10 @@ function renderBreakdown(): void {
     drillMeta.className = "drill-meta";
     drillMeta.textContent = row
       ? t(currentLocale, "drillMeta", {
-        items: formatNumber(row.items),
+        items: itemCountLabel(row.items),
         tokens: formatNumber(row.tokens),
       })
-      : t(currentLocale, "drillItems", { items: formatNumber(items.length) });
+      : itemCountLabel(items.length);
     drill.append(drillTitle, drillMeta);
     breakdownBody.append(drill);
 
@@ -1226,7 +1240,7 @@ function renderBreakdown(): void {
     const meta = document.createElement("span");
     meta.className = "row-meta";
     meta.textContent = t(currentLocale, "drillMeta", {
-      items: formatNumber(entry.items),
+      items: itemCountLabel(entry.items),
       tokens: formatNumber(entry.tokens),
     });
     row.append(swatch, name, meta);
@@ -1244,9 +1258,10 @@ function renderBreakdown(): void {
   const freeMeta = document.createElement("span");
   freeMeta.className = "row-meta";
   const bar = windowBar(summary.used, summary.window);
+  const freeTokens = t(currentLocale, "tokenCount", { tokens: formatNumber(bar.free) });
   freeMeta.textContent = bar.over
-    ? `${formatNumber(bar.free)} tokens · ${t(currentLocale, "overWindow")}`
-    : `${formatNumber(bar.free)} tokens`;
+    ? `${freeTokens} · ${t(currentLocale, "overWindow")}`
+    : freeTokens;
   freeMeta.classList.toggle("is-over", bar.over);
   free.append(freeSwatch, freeName, freeMeta);
   list.append(free);
@@ -1444,6 +1459,9 @@ function parseItemDetail(body: string): SnapshotItemDetail | null {
 function renderSummary(next: SnapshotSummary): void {
   placeholder.hidden = true;
   usage.hidden = false;
+  usageModel.hidden = false;
+  usageMeter.hidden = false;
+  usageProgress.hidden = false;
   mapCard.hidden = false;
   breakdownCard.hidden = false;
 
@@ -1463,6 +1481,7 @@ function renderSummary(next: SnapshotSummary): void {
   estimatedSlot.hidden = !next.estimated;
   assumedSlot.hidden = !next.windowAssumed;
   baselineSlot.hidden = !next.baseline;
+  usageBadges.hidden = !(next.estimated || next.windowAssumed || next.baseline);
 
   const signature = snapshotSignature(next);
   if (signature === mapSignature) return;
@@ -1694,9 +1713,15 @@ async function runRefresh(trigger: RefreshTrigger): Promise<void> {
 
 function noteUnreachable(error: unknown, unexpected = false): void {
   booted = true;
-  // 已经有数据时静默保留，连续失败由 banner 统一提示；
-  // 但 host 明确不可用（未授权、暂停、Service 停止）时直接替换内容。
-  if (!isBlockingHostFailure(error) && (summary !== null || connected)) return;
+  // 已经有数据时静默保留内容，连续失败由 banner 统一提示；
+  // 但连接指示必须诚实反映当前 host / Service 状态。
+  if (!isBlockingHostFailure(error) && (summary !== null || connected)) {
+    const copy = unexpected
+      ? { titleKey: "unexpectedServiceTitle" as const, detailKey: "unexpectedServiceDetail" as const }
+      : failureOf(error);
+    renderStatus({ kind: "failed", titleKey: copy.titleKey, detailKey: copy.detailKey });
+    return;
+  }
 
   connected = false;
   summaryProblem = null;

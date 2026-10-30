@@ -11,7 +11,6 @@ export function resolveLocale(tag: string | undefined): Locale {
 }
 
 const en = {
-  panelSubtitle: "Composition of the last request",
   refresh: "Refresh",
   retry: "Retry",
   retrying: "Retrying…",
@@ -37,8 +36,8 @@ const en = {
   mapAria: "Context map, drawn by used tokens",
   listSeparator: "; ",
   freeSpace: "Free space",
-  usedCaption: "Used {used} / {window} tokens",
-  freeCaption: "Free space {tokens} tokens",
+  tokenCount: "{tokens} tokens",
+  tokensUnit: "tokens",
   freeCellLabel: "Free space · {tokens} tokens",
   freeLegend: "Free {value}",
   usedLegend: "Used {value}",
@@ -48,8 +47,9 @@ const en = {
   overWindow: "over window",
   breakdownTitle: "Breakdown",
   back: "Back",
-  drillMeta: "{items} items · {tokens} tokens",
-  drillItems: "{items} items",
+  drillMeta: "{items} · {tokens} tokens",
+  itemCountOne: "1 item",
+  itemCountMany: "{items} items",
   drillEmpty: "No items in this category.",
   unnamedItem: "Untitled item",
   itemChars: "{chars} chars",
@@ -120,7 +120,6 @@ const en = {
 export type MessageKey = keyof typeof en;
 
 const zh: Record<MessageKey, string> = {
-  panelSubtitle: "最后一次请求的上下文构成",
   refresh: "刷新",
   retry: "重试",
   retrying: "重试中…",
@@ -144,8 +143,8 @@ const zh: Record<MessageKey, string> = {
   mapAria: "Context map，按已用 token 绘制",
   listSeparator: "；",
   freeSpace: "空闲空间",
-  usedCaption: "已用 {used} / {window} tokens",
-  freeCaption: "空闲空间 {tokens} tokens",
+  tokenCount: "{tokens} tokens",
+  tokensUnit: "tokens",
   freeCellLabel: "空闲空间 · {tokens} tokens",
   freeLegend: "空闲 {value}",
   usedLegend: "已用 {value}",
@@ -155,8 +154,9 @@ const zh: Record<MessageKey, string> = {
   overWindow: "已超出窗口",
   breakdownTitle: "Breakdown",
   back: "返回",
-  drillMeta: "{items} 条 · {tokens} tokens",
-  drillItems: "{items} 条",
+  drillMeta: "{items} · {tokens} tokens",
+  itemCountOne: "1 条",
+  itemCountMany: "{items} 条",
   drillEmpty: "这个分类没有可列出的条目。",
   unnamedItem: "未命名条目",
   itemChars: "{chars} 字符",
