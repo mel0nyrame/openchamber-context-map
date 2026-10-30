@@ -30,7 +30,126 @@ async function freePort(): Promise<number> {
 const discoveryDir = await mkdtemp(join(tmpdir(), "context-map-dev-"));
 process.env.CONTEXT_MAP_DISCOVERY_DIR = discoveryDir;
 
-const disposeCollector = await collector.setup({});
+const DEV_SESSION = "dev-session";
+
+const captured: { fire: ((context: unknown) => void) | null } = { fire: null };
+
+// 假插件上下文：hook 由 dev 脚本自己触发，provider 用量与模型窗口返回固定值，
+// 这样不启动 OpenCode 也能看到完整面板。
+const fakeApi = {
+  session: {
+    hook: async (name: string, callback: (context: unknown) => void) => {
+      if (name === "context") captured.fire = callback;
+      return {
+        dispose: async () => {
+          captured.fire = null;
+        },
+      };
+    },
+    context: async () => [
+      {
+        type: "assistant",
+        id: "dev-assistant",
+        content: [],
+        tokens: { input: 18_400, output: 1_200, reasoning: 300, cache: { read: 62_800, write: 4_100 } },
+      },
+    ],
+  },
+  model: {
+    list: async () => ({
+      data: [{ providerID: "anthropic", modelID: "claude-sonnet-4-5", limit: { context: 200_000 } }],
+    }),
+  },
+};
+
+const disposeCollector = await collector.setup(fakeApi);
+
+const SYSTEM_PROMPT = `You are a coding agent working inside a user's repository.
+Follow the project conventions in AGENTS.md. Prefer the smallest change that solves the problem.
+Ask before destructive operations. Keep replies in the user's language.
+
+${"Tool use policy: read files before editing. Run the test suite after changes.\n".repeat(12)}`;
+
+const TOOL_READ = {
+  description: "Read a file from the workspace. Returns numbered lines.",
+  parameters: {
+    type: "object",
+    properties: { path: { type: "string" }, offset: { type: "number" }, limit: { type: "number" } },
+    required: ["path"],
+  },
+};
+
+const TOOL_EDIT = {
+  description: "Replace an exact string in a file.",
+  parameters: {
+    type: "object",
+    properties: { path: { type: "string" }, old: { type: "string" }, next: { type: "string" } },
+    required: ["path", "old", "next"],
+  },
+};
+
+const TOOL_BASH = {
+  description: "Run a shell command in the workspace.",
+  parameters: {
+    type: "object",
+    properties: { command: { type: "string" }, workdir: { type: "string" } },
+    required: ["command"],
+  },
+};
+
+const READ_RESULT = `     1: import { connectHost } from "@openchamber/sdk";
+     2: import { applyHostReady } from "@openchamber/sdk/ui";
+     3:
+     4: const host = connectHost();
+     5: host.onReady((context) => {
+     6:   applyHostReady(context, document.documentElement);
+     7: });
+${"     8: // …\n".repeat(40)}`;
+
+const DEV_FIXTURE = {
+  sessionID: DEV_SESSION,
+  model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
+  system: [
+    { type: "text", text: SYSTEM_PROMPT },
+    { type: "text", text: "Current directory: /Users/dev/project\nToday is Friday." },
+  ],
+  tools: { read: TOOL_READ, edit: TOOL_EDIT, bash: TOOL_BASH },
+  messages: [
+    {
+      role: "user",
+      content: [{ type: "text", text: "面板里的地图为什么只画了已用部分？我想同时看到窗口还剩多少。" }],
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "reasoning",
+          text: "用户想知道地图与窗口的关系。先看当前实现，再解释 5px bar 的职责。".repeat(8),
+        },
+        { type: "tool-call", name: "read", input: { path: "src/panel/map.ts", limit: 120 } },
+      ],
+    },
+    { role: "tool", content: [{ type: "tool-result", name: "read", result: READ_RESULT }] },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `地图表达的是已用部分的构成，窗口余量交给下面的 5px bar。
+占用低时如果按窗口铺格，分类格子会被压缩到看不清，所以格子总数固定，比例只在地图内部生效。`.repeat(4),
+        },
+      ],
+    },
+    {
+      role: "user",
+      content: [{ type: "text", text: "明白了。那 Free space 在 Breakdown 里为什么单独一行？" }],
+    },
+  ],
+};
+
+captured.fire?.(DEV_FIXTURE);
+// 等异步补齐写入 provider 用量与窗口。
+await Bun.sleep(150);
 const serviceToken = randomBytes(32).toString("hex");
 const servicePort = await freePort();
 
@@ -97,6 +216,30 @@ const themeTokens = {
   radius: "8px",
 };
 
+const darkTokens = {
+  ...themeTokens,
+  background: "#0f1216",
+  elevated: "#171b21",
+  foreground: "#e6e9ee",
+  muted: "#9aa3ad",
+  subtle: "#151a20",
+  border: "#2b323b",
+  hover: "#1d242c",
+  selection: "#1e3a5f",
+  focus: "#3b82f6",
+  primary: "#3b82f6",
+  mutedSurface: "#151a20",
+  elevatedForeground: "#e6e9ee",
+  active: "#1b222a",
+  selectionForeground: "#e6e9ee",
+  primaryForeground: "#ffffff",
+  primaryText: "#93c5fd",
+  successText: "#86efac",
+  warningText: "#fcd34d",
+  errorText: "#fca5a5",
+  infoText: "#93c5fd",
+};
+
 const harness = `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -113,6 +256,8 @@ const harness = `<!doctype html>
 <script>
   const CHANNEL = ${JSON.stringify(CHANNEL)};
   const API_VERSION = ${API_VERSION};
+  const themeMode = new URLSearchParams(location.search).get("theme") === "dark" ? "dark" : "light";
+  const tokens = themeMode === "dark" ? ${JSON.stringify(darkTokens)} : ${JSON.stringify(themeTokens)};
   const frame = document.getElementById("panel");
   const ready = {
     channel: CHANNEL,
@@ -121,9 +266,9 @@ const harness = `<!doctype html>
     payload: {
       surface: "panel",
       locale: "zh-CN",
-      theme: { mode: "light", tokens: ${JSON.stringify(themeTokens)} },
+      theme: { mode: themeMode, tokens },
       features: {},
-      session: null,
+      session: { id: ${JSON.stringify(DEV_SESSION)}, title: "Context Map 开发预览", busy: false, model: "anthropic/claude-sonnet-4-5" },
       connection: null,
       settings: null,
       directory: null,
@@ -160,7 +305,8 @@ const harness = `<!doctype html>
           init.headers = { "Content-Type": "application/json" };
           init.body = request.body;
         }
-        const response = await fetch("/__service?path=" + encodeURIComponent(request.path), init);
+        const query = request.query ? "?" + new URLSearchParams(request.query).toString() : "";
+        const response = await fetch("/__service?path=" + encodeURIComponent(request.path + query), init);
         const result = await response.json();
         reply(message.id, { status: result.status, body: result.body });
       } catch (error) {
