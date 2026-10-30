@@ -64,6 +64,8 @@ The panel has three parts:
 
 Before a session's first request, the panel shows a **baseline** built from the most recent real request for the same agent and model: system prompt and tool definitions only. It is marked `baseline` and `estimated`, and the first real request replaces it. If no such request exists yet, the panel waits for the first request instead.
 
+The Collector saves each snapshot's summary to disk, so the panel still shows your last context after OpenChamber restarts. Restored snapshots are marked `last run`. Only the summary and item heads are kept; item previews are not, so opening an item from a restored snapshot says the preview is unavailable until a new request arrives.
+
 The panel follows OpenChamber's language. English is the source language; Chinese is translated; any other locale falls back to English.
 
 ## Upgrade
@@ -234,7 +236,9 @@ docs/adr/        Architecture decision records (Chinese)
 
 ## Privacy
 
-- Snapshots stay in memory; each session keeps only its last request, up to 20 sessions.
+- Each session keeps only its last request, up to 20 sessions.
+- The Collector saves each snapshot's summary to `~/.local/state/openchamber-context-map/snapshots`: item heads (200 characters), token counts, and the model name. Item previews are not saved. Files are mode 0600 in a 0700 directory and expire after 7 days.
+- Set `CONTEXT_MAP_PERSIST=0` to keep snapshots in memory only.
 - A preview is truncated to 8000 characters, in memory only.
 - Discovery files are mode 0600 and their directory is 0700. The bearer token is used only between the Collector and the Service and never reaches the panel.
 

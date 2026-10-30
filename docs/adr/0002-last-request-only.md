@@ -5,3 +5,5 @@
 **Consequences**
 
 OpenCode 重启后没有数据，要等下一次请求。tool continuation 会用新快照覆盖同一轮的旧快照，所以面板在 busy 期间可能跳变。
+
+「不把 prompt 写盘」这一条已由 ADR 0014 取代：快照骨架现在会持久化到 state 目录；「只保留最后一次请求、不做历史回填、不存正文预览」仍然有效。

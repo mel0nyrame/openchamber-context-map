@@ -22,5 +22,6 @@ Issue 与 spec 存放在本仓库的 GitHub Issues（`mel0nyrame/openchamber-con
 - 失败状态按来源分层：host 失败、Collector 不可用、单次请求失败各有独立状态与文案，不要合并成一句通用错误。理由见 `docs/adr/0008-degradation-layers.md`。
 - 安装脚本只接受空目标或本工具生成的目标，冲突时停止并保留原文件；改写 `extensions.json` 时保留未知字段。理由见 `docs/adr/0010-installation.md`。
 - 面板文案只写在 `src/panel/i18n.ts`，渲染代码通过 `t(locale, key)` 取值；`en` 是源语言，`zh` 是翻译，其余 locale 回退 `en`。理由见 `docs/adr/0013-panel-localization.md`。
+- 持久化只存 `SnapshotSummary`（含条目 head），不存预览；改它的字段要同时升 `SNAPSHOT_SCHEMA_VERSION`，旧文件按版本丢弃。理由见 `docs/adr/0014-snapshot-persistence.md`。
 - README 用英文；`docs/` 与 ADR 用中文。
 - OpenCode V2 插件接口与已核实的事实见 `docs/opencode-plugin.md`。
