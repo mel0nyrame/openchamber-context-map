@@ -204,10 +204,11 @@ export function buildBreakdown(
   for (const category of CATEGORIES) {
     const entry = usage.get(category);
     const tokens = positiveTokens(entry?.tokens);
-    if (tokens <= 0) continue;
     const items = typeof entry?.items === "number" && Number.isFinite(entry.items)
       ? Math.max(0, Math.floor(entry.items))
       : 0;
+    // 没有 token 也没有条目的分类不占一行；media 这类 0 token 但有条目的分类要留下。
+    if (tokens <= 0 && items === 0) continue;
     rows.push({ kind: "category", category, items, tokens });
   }
 

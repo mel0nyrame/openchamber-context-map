@@ -229,6 +229,11 @@ describe("window bar 与 Breakdown", () => {
     expect(breakdown.rows[1]).toMatchObject({ items: 1, tokens: 100 });
     expect(breakdown.free.tokens).toBe(600);
   });
+  test("0 token 但有条目的分类仍然列出", () => {
+    const breakdown = buildBreakdown(usage({ other: { tokens: 0, items: 2 } }), 100, 1_000);
+    expect(breakdown.rows.map((row) => row.category)).toEqual(["other"]);
+    expect(breakdown.rows[0]).toMatchObject({ items: 2, tokens: 0 });
+  });
 });
 
 describe("条目筛选", () => {

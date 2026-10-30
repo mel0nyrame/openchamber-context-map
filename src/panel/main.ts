@@ -13,6 +13,8 @@ import { COLLECTOR_VERSION } from "../shared/version.ts";
 import { describeHostFailure, type HostFailureCopy } from "./failure.ts";
 import { CATEGORY_LABELS } from "./labels.ts";
 import {
+  COMPACT_COLUMNS,
+  MAP_COLUMNS,
   buildBreakdown,
   categoryOfItem,
   gradientStops,
@@ -64,7 +66,7 @@ const STYLE = `
   .map-hint { min-width: 0; max-width: 58%; color: var(--oc-muted); font-size: 11px; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
   .map-wrap { position: relative; }
-  .map { display: grid; grid-template-columns: repeat(25, minmax(0, 1fr)); gap: 2px; }
+  .map { display: grid; grid-template-columns: repeat(${MAP_COLUMNS}, minmax(0, 1fr)); gap: 2px; }
   .cell { appearance: none; -webkit-appearance: none; display: block; width: 100%; min-width: 0;
     aspect-ratio: 1; padding: 0; border: 0; border-radius: 2px; background: var(--oc-border);
     cursor: pointer; transition: opacity .12s ease; }
@@ -144,7 +146,7 @@ const STYLE = `
     font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
   .preview-body:focus-visible { outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: -2px; }
   @media (max-width: 520px) {
-    .map { grid-template-columns: repeat(20, minmax(0, 1fr)); }
+    .map { grid-template-columns: repeat(${COMPACT_COLUMNS}, minmax(0, 1fr)); }
     .row-meta { font-size: 10px; }
   }
   .usage-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -413,7 +415,8 @@ let session: SessionSnapshot | null = null;
 let connected = false;
 let booted = false;
 let summary: SnapshotSummary | null = null;
-let summaryProblem = false;
+type SummaryProblem = "timeout" | "other";
+let summaryProblem: SummaryProblem | null = null;
 let hostProblem: HostFailureCopy | null = null;
 let collectorReason: "not_found" | "unreachable" | null = null;
 let collectorOutdated: { version: string; expectedVersion: string } | null = null;
@@ -472,7 +475,7 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
-  if (preview || !selectedCategory || event.defaultPrevented) return;
+  if (preview || event.defaultPrevented) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   const target = event.target;
   if (
@@ -486,6 +489,20 @@ document.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   const delta = key === "arrowdown" || key === "j" ? 1 : key === "arrowup" || key === "k" ? -1 : 0;
   if (delta === 0) return;
+
+  if (!selectedCategory) {
+    // 分类列表：焦点在分类行上时，方向键在行之间移动；Enter 由按钮自己处理。
+    const row = document.activeElement;
+    if (!(row instanceof HTMLButtonElement) || !row.matches("button.row[data-category]")) return;
+    const rows = Array.from(
+      breakdownBody.querySelectorAll<HTMLButtonElement>("button.row[data-category]"),
+    );
+    const next = moveFocus(rows.indexOf(row), rows.length, delta);
+    if (next < 0) return;
+    event.preventDefault();
+    rows[next]?.focus();
+    return;
+  }
 
   const items = currentItems();
   if (items.length === 0) return;
@@ -625,8 +642,14 @@ function renderContent(): void {
     }
     return;
   }
-  if (summaryProblem) {
-    showPlaceholder("快照暂时不可用", "Collector 没有及时响应，稍后会自动重试。", true);
+  if (summaryProblem !== null) {
+    showPlaceholder(
+      summaryProblem === "timeout" ? "Collector 没有及时响应" : "快照暂时不可用",
+      summaryProblem === "timeout"
+        ? "Service 等待 Collector 超时，稍后会自动重试。"
+        : "Collector 返回了意外结果，稍后会自动重试。",
+      true,
+    );
     return;
   }
   if (!summary || summary.sessionID !== session.id) {
@@ -1352,7 +1375,7 @@ function setSession(next: SessionSnapshot | null): void {
   setManualLoading(false);
   stopPollTimer();
   summary = null;
-  summaryProblem = false;
+  summaryProblem = null;
   selectedCategory = null;
   mapSignature = null;
   currentLayout = null;
@@ -1496,7 +1519,7 @@ function noteUnreachable(error: unknown, unexpected = false): void {
   if (!isBlockingHostFailure(error) && (summary !== null || connected)) return;
 
   connected = false;
-  summaryProblem = false;
+  summaryProblem = null;
   collectorReason = null;
   collectorOutdated = null;
   hostProblem = unexpected
@@ -1535,7 +1558,7 @@ async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
   if (collector.connected !== true || typeof collector.version !== "string") {
     connected = false;
     summary = null;
-    summaryProblem = false;
+    summaryProblem = null;
     collectorOutdated = null;
     collectorReason = collector.reason === "unreachable" ? "unreachable" : "not_found";
     booted = true;
@@ -1562,7 +1585,7 @@ async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
   const current = session;
   if (!current) {
     summary = null;
-    summaryProblem = false;
+    summaryProblem = null;
     booted = true;
     renderContent();
     return true;
@@ -1583,20 +1606,34 @@ async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
       const parsed = parseSummary(result.body);
       if (parsed === null) {
         if (!quiet) {
-          summaryProblem = summary === null;
+          summaryProblem = summary === null ? "other" : null;
           booted = true;
           renderContent();
         }
         return false;
       }
       summary = parsed;
-      summaryProblem = false;
+      summaryProblem = null;
     } else if (result.status === 404) {
       summary = null;
-      summaryProblem = false;
+      summaryProblem = null;
+    } else if (result.status === 503) {
+      // 503 只表示没有可用的 Collector：按连接状态处理，而不是超时。
+      connected = false;
+      summary = null;
+      summaryProblem = null;
+      collectorReason = "not_found";
+      booted = true;
+      renderStatus({ kind: "disconnected", reason: "not_found" });
+      renderContent();
+      return false;
     } else {
       if (!quiet) {
-        summaryProblem = summary === null;
+        summaryProblem = result.status === 504
+          ? "timeout"
+          : summary === null
+            ? "other"
+            : null;
         booted = true;
         renderContent();
       }
@@ -1606,7 +1643,7 @@ async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
     if (token !== refreshToken) return true;
     if (session?.id !== requestedSession) return true;
     if (!quiet) {
-      summaryProblem = summary === null;
+      summaryProblem = summary === null ? "other" : null;
       booted = true;
       renderContent();
     }
