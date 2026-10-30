@@ -1,6 +1,7 @@
 // 不安装 OpenChamber 也能跑通的开发链路：
 // Collector（进程内）→ Service（子进程）→ 面板（iframe + 最小 host 桥）。
-// 用法：bun run build && bun run dev
+// 用法：bun run build && bun run dev（手动点「模拟请求」注入快照）
+//       bun run dev:fixture（启动即注入固定快照）
 import { randomBytes } from "node:crypto";
 import { spawn } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -193,9 +194,13 @@ function fireFixture(sessionID: string): boolean {
   return true;
 }
 
-fireFixture(DEV_SESSION);
-// 等异步补齐写入 provider 用量与窗口。
-await Bun.sleep(150);
+const fixtureMode = process.argv.includes("--fixture");
+
+if (fixtureMode) {
+  fireFixture(DEV_SESSION);
+  // 等异步补齐写入 provider 用量与窗口。
+  await Bun.sleep(150);
+}
 const serviceToken = randomBytes(32).toString("hex");
 const servicePort = await freePort();
 
@@ -646,6 +651,11 @@ const preview = Bun.serve({
 
 console.log(`Context Map 开发预览：http://127.0.0.1:${previewPort}`);
 console.log(`Service：127.0.0.1:${servicePort}；discovery：${discoveryDir}`);
+if (fixtureMode) {
+  console.log("已注入固定快照 DEV_FIXTURE；无需真实 OpenCode 请求。");
+} else {
+  console.log("未注入快照；在页面点「模拟请求」，或改用 bun run dev:fixture。");
+}
 
 let stopping = false;
 async function shutdown(): Promise<void> {
