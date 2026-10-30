@@ -9,4 +9,4 @@
 
 **Consequences**
 
-tool continuation 场景下 Used 滞后一轮，误差约为上一轮的 assistant 输出加一条 tool result。图片按 0 token 计，多图时整体标 estimated。
+tool continuation 场景下 Used 滞后一轮，误差约为上一轮的 assistant 输出加一条 tool result。图片按 0 token 计，多图时整体标 estimated。补齐时机与取整方式见 `docs/adr/0005-snapshot-enrichment.md`。
