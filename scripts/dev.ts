@@ -31,11 +31,13 @@ const discoveryDir = await mkdtemp(join(tmpdir(), "context-map-dev-"));
 process.env.CONTEXT_MAP_DISCOVERY_DIR = discoveryDir;
 
 const DEV_SESSION = "dev-session";
+const DEV_SESSION_B = "dev-session-b";
 
 const captured: { fire: ((context: unknown) => void) | null } = { fire: null };
 
 // 假插件上下文：hook 由 dev 脚本自己触发，provider 用量与模型窗口返回固定值，
-// 这样不启动 OpenCode 也能看到完整面板。
+// 这样不启动 OpenCode 也能看到完整面板。两个 session 用不同的 provider 用量，
+// 切换时能一眼看出旧数字有没有残留。
 const fakeApi = {
   session: {
     hook: async (name: string, callback: (context: unknown) => void) => {
@@ -46,12 +48,14 @@ const fakeApi = {
         },
       };
     },
-    context: async () => [
+    context: async (input: { sessionID: string }) => [
       {
         type: "assistant",
         id: "dev-assistant",
         content: [],
-        tokens: { input: 18_400, output: 1_200, reasoning: 300, cache: { read: 62_800, write: 4_100 } },
+        tokens: input.sessionID === DEV_SESSION_B
+          ? { input: 42_000, output: 900, reasoning: 100, cache: { read: 30_000, write: 2_000 } }
+          : { input: 18_400, output: 1_200, reasoning: 300, cache: { read: 62_800, write: 4_100 } },
       },
     ],
   },
@@ -62,7 +66,18 @@ const fakeApi = {
   },
 };
 
-const disposeCollector = await collector.setup(fakeApi);
+let collectorDispose: (() => Promise<void>) | null = await collector.setup(fakeApi);
+
+async function startCollector(): Promise<void> {
+  if (collectorDispose) return;
+  collectorDispose = await collector.setup(fakeApi);
+}
+
+async function stopCollector(): Promise<void> {
+  const dispose = collectorDispose;
+  collectorDispose = null;
+  await dispose?.();
+}
 
 const SYSTEM_PROMPT = `You are a coding agent working inside a user's repository.
 Follow the project conventions in AGENTS.md. Prefer the smallest change that solves the problem.
@@ -147,44 +162,88 @@ const DEV_FIXTURE = {
   ],
 };
 
-captured.fire?.(DEV_FIXTURE);
+const DEV_FIXTURE_B = {
+  ...DEV_FIXTURE,
+  sessionID: DEV_SESSION_B,
+  messages: [
+    {
+      role: "user",
+      content: [{ type: "text", text: "第二个 session：切换后应该立刻看到这里的数字，而不是上一个 session 的。" }],
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `这是第二个 session 的快照。provider 用量与第一个 session 不同，方便确认切换时旧数字已经清空。
+切换 session 后面板会先清空，再拉一次新快照；busy 时才继续每 2 秒轮询。`.repeat(3),
+        },
+      ],
+    },
+  ],
+};
+
+function fireFixture(sessionID: string): boolean {
+  if (!captured.fire) return false;
+  captured.fire(sessionID === DEV_SESSION_B ? DEV_FIXTURE_B : DEV_FIXTURE);
+  return true;
+}
+
+fireFixture(DEV_SESSION);
 // 等异步补齐写入 provider 用量与窗口。
 await Bun.sleep(150);
 const serviceToken = randomBytes(32).toString("hex");
 const servicePort = await freePort();
 
-const service = spawn(["bun", "src/service/main.ts"], {
-  cwd: ROOT,
-  env: {
-    ...process.env,
-    [SERVICE_PORT_ENV]: String(servicePort),
-    [SERVICE_TOKEN_ENV]: serviceToken,
-  },
-  stdout: "inherit",
-  stderr: "inherit",
-});
+let service: ReturnType<typeof spawn> | null = null;
 
-const deadline = Date.now() + 5_000;
-let ready = false;
-while (Date.now() < deadline) {
-  try {
-    const response = await fetch(`http://127.0.0.1:${servicePort}/health`, {
-      headers: { Authorization: `Bearer ${serviceToken}` },
-    });
-    if (response.status === 200) {
-      ready = true;
-      break;
+async function startService(): Promise<void> {
+  if (service) return;
+  const child = spawn(["bun", "src/service/main.ts"], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      [SERVICE_PORT_ENV]: String(servicePort),
+      [SERVICE_TOKEN_ENV]: serviceToken,
+    },
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  service = child;
+
+  const deadline = Date.now() + 5_000;
+  let ready = false;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${servicePort}/health`, {
+        headers: { Authorization: `Bearer ${serviceToken}` },
+      });
+      if (response.status === 200) {
+        ready = true;
+        break;
+      }
+    } catch {
+      // Service 还没开始监听。
     }
-  } catch {
-    // Service 还没开始监听。
+    await Bun.sleep(50);
   }
-  await Bun.sleep(50);
+  if (!ready) {
+    child.kill();
+    await child.exited;
+    service = null;
+    throw new Error("Service 未能在 5 秒内启动");
+  }
 }
-if (!ready) {
-  service.kill();
-  await disposeCollector();
-  throw new Error("Service 未能在 5 秒内启动");
+
+async function stopService(): Promise<void> {
+  const child = service;
+  service = null;
+  if (!child) return;
+  child.kill();
+  await child.exited;
 }
+
+await startService();
 
 const themeTokens = {
   background: "#ffffff",
@@ -248,10 +307,44 @@ const harness = `<!doctype html>
 <title>Context Map · 开发预览</title>
 <style>
   html, body { margin: 0; height: 100%; background: #fff; }
-  iframe { display: block; width: 100%; height: 100%; border: 0; }
+  body { display: flex; flex-direction: column; }
+  #devbar {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    padding: 8px 10px; border-bottom: 1px solid #d0d7de;
+    background: #f6f8fa; color: #1f2328;
+    font: 12px/1.4 system-ui, -apple-system, sans-serif;
+  }
+  #devbar button {
+    font: inherit; padding: 4px 8px; border: 1px solid #d0d7de;
+    border-radius: 6px; background: #fff; color: inherit; cursor: pointer;
+  }
+  #devbar button:hover { background: #eef2f7; }
+  #devbar .sep { color: #d0d7de; }
+  #devstate { margin-left: auto; color: #656d76; }
+  #panel { display: block; width: 100%; flex: 1; border: 0; }
 </style>
 </head>
 <body>
+<div id="devbar">
+  <button data-action="session-a">Session A</button>
+  <button data-action="session-b">Session B</button>
+  <button data-action="session-none">无 session</button>
+  <span class="sep">|</span>
+  <button data-action="busy">Busy</button>
+  <button data-action="idle">Idle</button>
+  <span class="sep">|</span>
+  <button data-action="started">开始</button>
+  <button data-action="completed">完成</button>
+  <button data-action="failure">失败</button>
+  <span class="sep">|</span>
+  <button data-action="request">模拟请求</button>
+  <button data-action="panel-refresh">刷新面板</button>
+  <button data-action="service-down">停 Service</button>
+  <button data-action="service-up">起 Service</button>
+  <button data-action="collector-down">停 Collector</button>
+  <button data-action="collector-up">起 Collector</button>
+  <span id="devstate"></span>
+</div>
 <iframe id="panel" src="/panel/index.html"></iframe>
 <script>
   const CHANNEL = ${JSON.stringify(CHANNEL)};
@@ -259,6 +352,13 @@ const harness = `<!doctype html>
   const themeMode = new URLSearchParams(location.search).get("theme") === "dark" ? "dark" : "light";
   const tokens = themeMode === "dark" ? ${JSON.stringify(darkTokens)} : ${JSON.stringify(themeTokens)};
   const frame = document.getElementById("panel");
+  const stateLabel = document.getElementById("devstate");
+  const sessions = {
+    a: { id: ${JSON.stringify(DEV_SESSION)}, title: "Context Map 开发预览", busy: false, model: "anthropic/claude-sonnet-4-5" },
+    b: { id: ${JSON.stringify(DEV_SESSION_B)}, title: "第二个 session", busy: false, model: "anthropic/claude-sonnet-4-5" },
+  };
+  let currentName = "Session A";
+  let current = { ...sessions.a };
   const ready = {
     channel: CHANNEL,
     v: API_VERSION,
@@ -268,11 +368,23 @@ const harness = `<!doctype html>
       locale: "zh-CN",
       theme: { mode: themeMode, tokens },
       features: {},
-      session: { id: ${JSON.stringify(DEV_SESSION)}, title: "Context Map 开发预览", busy: false, model: "anthropic/claude-sonnet-4-5" },
+      session: current,
       connection: null,
       settings: null,
       directory: null,
     },
+  };
+
+  const send = (type, payload) => frame.contentWindow.postMessage({
+    channel: CHANNEL, v: API_VERSION, type, payload,
+  }, "*");
+  const sendReady = () => frame.contentWindow.postMessage({
+    ...ready,
+    payload: { ...ready.payload, session: current },
+  }, "*");
+  const renderState = (note) => {
+    const base = current ? currentName + " · " + (current.busy ? "busy" : "idle") : "无 session";
+    stateLabel.textContent = base + (note ? " · " + note : "");
   };
 
   const reply = (id, payload) => frame.contentWindow.postMessage({
@@ -280,7 +392,7 @@ const harness = `<!doctype html>
   }, "*");
 
   // hello 可能早于本脚本注册监听；load 时补发一次 ready。
-  frame.addEventListener("load", () => frame.contentWindow.postMessage(ready, "*"));
+  frame.addEventListener("load", sendReady);
 
   window.addEventListener("message", async (event) => {
     if (event.source !== frame.contentWindow) return;
@@ -288,7 +400,7 @@ const harness = `<!doctype html>
     if (!message || message.channel !== CHANNEL || message.v !== API_VERSION) return;
 
     if (message.type === "hello") {
-      frame.contentWindow.postMessage(ready, "*");
+      sendReady();
       return;
     }
 
@@ -317,6 +429,61 @@ const harness = `<!doctype html>
       }
     }
   });
+
+  document.getElementById("devbar").addEventListener("click", async (event) => {
+    const button = event.target instanceof Element ? event.target.closest("button") : null;
+    const action = button && button.dataset.action;
+    if (!action) return;
+    let note = "";
+    if (action === "session-a" || action === "session-b") {
+      currentName = action === "session-a" ? "Session A" : "Session B";
+      current = { ...sessions[action === "session-a" ? "a" : "b"] };
+      send("session", { session: current });
+      note = "已切 session";
+    } else if (action === "session-none") {
+      current = null;
+      send("session", { session: null });
+      note = "已关闭 session";
+    } else if (action === "busy" || action === "idle") {
+      if (current) {
+        current = { ...current, busy: action === "busy" };
+        send("session", { session: current });
+      }
+    } else if (action === "started" || action === "completed" || action === "failure") {
+      if (current) {
+        if (action === "started") current = { ...current, busy: true };
+        if (action === "completed") current = { ...current, busy: false };
+        send("session-lifecycle", { sessionId: current.id, phase: action });
+        note = "lifecycle: " + action;
+      }
+    } else if (action === "request") {
+      if (current) {
+        await fetch("/__dev/request?session=" + encodeURIComponent(current.id), { method: "POST" });
+        note = "已触发采集";
+      }
+    } else if (action === "panel-refresh") {
+      const button = Array.from(frame.contentDocument.querySelectorAll("button"))
+        .find((node) => node.textContent.trim() === "刷新");
+      if (button) {
+        button.click();
+        note = "已点面板刷新";
+      }
+    } else if (action === "service-down") {
+      await fetch("/__dev/service/down", { method: "POST" });
+      note = "Service 已停";
+    } else if (action === "service-up") {
+      await fetch("/__dev/service/up", { method: "POST" });
+      note = "Service 已起";
+    } else if (action === "collector-down") {
+      await fetch("/__dev/collector/down", { method: "POST" });
+      note = "Collector 已停";
+    } else if (action === "collector-up") {
+      await fetch("/__dev/collector/up", { method: "POST" });
+      note = "Collector 已起";
+    }
+    renderState(note);
+  });
+  renderState();
 </script>
 </body>
 </html>`;
@@ -333,6 +500,34 @@ const preview = Bun.serve({
     }
     if (path === "/panel/index.html") return new Response(Bun.file(join(ROOT, "panel/index.html")));
     if (path === "/panel/main.js") return new Response(Bun.file(join(ROOT, "panel/main.js")));
+    if (path === "/__dev/request" && request.method === "POST") {
+      const sessionID = url.searchParams.get("session") ?? DEV_SESSION;
+      return Response.json({ ok: fireFixture(sessionID) });
+    }
+    if (path === "/__dev/service/down" && request.method === "POST") {
+      await stopService();
+      return Response.json({ ok: true });
+    }
+    if (path === "/__dev/service/up" && request.method === "POST") {
+      try {
+        await startService();
+        return Response.json({ ok: true });
+      } catch (error) {
+        return Response.json({ ok: false, error: String(error) }, { status: 500 });
+      }
+    }
+    if (path === "/__dev/collector/down" && request.method === "POST") {
+      await stopCollector();
+      return Response.json({ ok: true });
+    }
+    if (path === "/__dev/collector/up" && request.method === "POST") {
+      try {
+        await startCollector();
+        return Response.json({ ok: true });
+      } catch (error) {
+        return Response.json({ ok: false, error: String(error) }, { status: 500 });
+      }
+    }
     if (path === "/__service") {
       const target = url.searchParams.get("path") ?? "/";
       if (!target.startsWith("/") || target.startsWith("//")) {
@@ -359,9 +554,8 @@ async function shutdown(): Promise<void> {
   if (stopping) return;
   stopping = true;
   preview.stop(true);
-  service.kill();
-  await service.exited;
-  await disposeCollector();
+  await stopService();
+  await stopCollector();
   await rm(discoveryDir, { recursive: true, force: true });
   process.exit(0);
 }
