@@ -74,7 +74,8 @@ describe("失败计数", () => {
     expect(pollDelay(state)).toBeNull();
     expect(refreshBanner(state)).toMatchObject({
       tone: "warning",
-      title: "自动刷新已暂停",
+      titleKey: "refreshHaltedTitle",
+      bodyKey: "refreshHaltedBody",
     });
   });
 
@@ -110,8 +111,8 @@ describe("失败计数", () => {
     expect(state.manualFailure).toBe(true);
     expect(shouldPoll(state)).toBe(true);
     expect(refreshBanner(state)).toMatchObject({
-      title: "刷新失败",
-      body: "显示的是上次采集的快照。点「刷新」重试。",
+      titleKey: "refreshFailedTitle",
+      bodyKey: "refreshFailedBody",
     });
 
     const recovered = refreshSucceeded(state);

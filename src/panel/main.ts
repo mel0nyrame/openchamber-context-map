@@ -11,7 +11,13 @@ import {
 } from "../shared/types.ts";
 import { COLLECTOR_VERSION } from "../shared/version.ts";
 import { describeHostFailure, type HostFailureCopy } from "./failure.ts";
-import { CATEGORY_LABELS } from "./labels.ts";
+import {
+  CATEGORY_LABEL_KEYS,
+  resolveLocale,
+  t,
+  type Locale,
+  type MessageKey,
+} from "./i18n.ts";
 import {
   COMPACT_COLUMNS,
   MAP_COLUMNS,
@@ -181,7 +187,7 @@ type PanelState =
   | { kind: "checking" }
   | { kind: "connected"; version: string; outdated?: boolean; expectedVersion?: string }
   | { kind: "disconnected"; reason: "not_found" | "unreachable" }
-  | { kind: "failed"; title: string; detail: string };
+  | { kind: "failed"; titleKey: MessageKey; detailKey: MessageKey };
 
 interface HealthBody {
   collector?: {
@@ -197,6 +203,8 @@ const host = connectHost();
 const root = document.querySelector<HTMLElement>("#root");
 if (!root) throw new Error("Missing #root");
 
+let currentLocale: Locale = "en";
+
 const style = document.createElement("style");
 style.textContent = STYLE;
 const palette = document.createElement("style");
@@ -209,18 +217,18 @@ const headRow = document.createElement("div");
 headRow.className = "head-row";
 const title = document.createElement("div");
 title.className = "title";
-title.textContent = "Context Map";
+title.textContent = t(currentLocale, "mapTitle");
 const headActions = document.createElement("div");
 headActions.className = "head-actions";
 const refreshButton = mountButton(headActions, {
-  label: "刷新",
+  label: t(currentLocale, "refresh"),
   variant: "outline",
   size: "xs",
   onClick: () => manualRefresh(),
 });
 const subtitle = document.createElement("div");
 subtitle.className = "subtitle";
-subtitle.textContent = "最后一次请求的上下文构成";
+subtitle.textContent = t(currentLocale, "panelSubtitle");
 const updated = document.createElement("div");
 updated.className = "updated";
 updated.hidden = true;
@@ -231,16 +239,16 @@ const bannerSlot = document.createElement("div");
 bannerSlot.hidden = true;
 const banner = mountBanner(bannerSlot, {
   tone: "warning",
-  title: "刷新失败",
+  title: t(currentLocale, "refreshFailedTitle"),
   body: "",
-  action: { label: "重试", onClick: () => manualRefresh() },
+  action: { label: t(currentLocale, "retry"), onClick: () => manualRefresh() },
 });
 
 const versionSlot = document.createElement("div");
 versionSlot.hidden = true;
 const versionBanner = mountBanner(versionSlot, {
   tone: "warning",
-  title: "collector 版本过旧",
+  title: t(currentLocale, "versionOutdatedTitle"),
   body: "",
 });
 
@@ -251,17 +259,23 @@ const usageHead = document.createElement("div");
 usageHead.className = "usage-head";
 const usageTitle = document.createElement("div");
 usageTitle.className = "usage-title";
-usageTitle.textContent = "Context usage";
+usageTitle.textContent = t(currentLocale, "usageTitle");
 const usageBadges = document.createElement("div");
 usageBadges.className = "usage-badges";
 const estimatedSlot = document.createElement("span");
 estimatedSlot.hidden = true;
-estimatedSlot.title = "部分数字由字符估算，provider 未提供完整 token 用量。";
-mountBadge(estimatedSlot, { label: "estimated", tone: "warning" });
+estimatedSlot.title = t(currentLocale, "estimatedTitle");
+const estimatedBadge = mountBadge(estimatedSlot, {
+  label: t(currentLocale, "estimatedBadge"),
+  tone: "warning",
+});
 const assumedSlot = document.createElement("span");
 assumedSlot.hidden = true;
-assumedSlot.title = "没有取得模型窗口，按 200,000 tokens 估算。";
-mountBadge(assumedSlot, { label: "assumed window", tone: "info" });
+assumedSlot.title = t(currentLocale, "assumedWindowTitle");
+const assumedBadge = mountBadge(assumedSlot, {
+  label: t(currentLocale, "assumedWindowBadge"),
+  tone: "info",
+});
 usageBadges.append(estimatedSlot, assumedSlot);
 usageHead.append(usageTitle, usageBadges);
 
@@ -280,7 +294,10 @@ usagePct.className = "usage-pct";
 usageMeter.append(usageNumbers, usagePct);
 
 const usageProgress = document.createElement("div");
-const progress = mountProgress(usageProgress, { value: 0, label: "已用" });
+const progress = mountProgress(usageProgress, {
+  value: 0,
+  label: t(currentLocale, "usedLabel"),
+});
 
 usage.append(usageHead, usageModel, usageMeter, usageProgress);
 
@@ -291,11 +308,11 @@ const mapHead = document.createElement("div");
 mapHead.className = "card-head";
 const mapTitle = document.createElement("div");
 mapTitle.className = "card-title";
-mapTitle.textContent = "Context map";
+mapTitle.textContent = t(currentLocale, "mapTitle");
 const mapHint = document.createElement("div");
 mapHint.className = "map-hint";
 mapHint.setAttribute("aria-live", "polite");
-mapHint.textContent = "悬停或点击格子查看分类";
+mapHint.textContent = t(currentLocale, "mapHint");
 mapHead.append(mapTitle, mapHint);
 
 const mapWrap = document.createElement("div");
@@ -303,21 +320,21 @@ mapWrap.className = "map-wrap";
 const mapGrid = document.createElement("div");
 mapGrid.className = "map";
 mapGrid.setAttribute("role", "group");
-mapGrid.setAttribute("aria-label", "Context map，按已用 token 绘制");
+mapGrid.setAttribute("aria-label", t(currentLocale, "mapAria"));
 const mapTip = document.createElement("div");
 mapTip.className = "map-tip";
 mapTip.setAttribute("role", "tooltip");
 mapTip.hidden = true;
 const mapEmpty = document.createElement("div");
 mapEmpty.className = "map-empty";
-mapEmpty.textContent = "这次请求还没有可绘制的上下文。";
+mapEmpty.textContent = t(currentLocale, "waitingForFirstRequestDetail");
 mapEmpty.hidden = true;
 mapWrap.append(mapGrid, mapTip, mapEmpty);
 
 const windowTrack = document.createElement("div");
 windowTrack.className = "window-track";
 windowTrack.setAttribute("role", "progressbar");
-windowTrack.setAttribute("aria-label", "Used / Window");
+windowTrack.setAttribute("aria-label", t(currentLocale, "usedLabel"));
 windowTrack.setAttribute("aria-valuemin", "0");
 windowTrack.setAttribute("aria-valuemax", "100");
 const windowUsedBar = document.createElement("div");
@@ -338,11 +355,11 @@ const breakdownHead = document.createElement("div");
 breakdownHead.className = "card-head";
 const breakdownTitle = document.createElement("div");
 breakdownTitle.className = "card-title";
-breakdownTitle.textContent = "Breakdown";
+breakdownTitle.textContent = t(currentLocale, "breakdownTitle");
 const backButton = document.createElement("button");
 backButton.type = "button";
 backButton.className = "back";
-backButton.textContent = "返回";
+backButton.textContent = t(currentLocale, "back");
 backButton.hidden = true;
 backButton.addEventListener("click", () => goBack());
 breakdownHead.append(breakdownTitle, backButton);
@@ -354,7 +371,7 @@ const previewPanel = document.createElement("div");
 previewPanel.className = "preview";
 previewPanel.tabIndex = -1;
 previewPanel.setAttribute("role", "group");
-previewPanel.setAttribute("aria-label", "条目预览");
+previewPanel.setAttribute("aria-label", t(currentLocale, "previewAria"));
 const previewHead = document.createElement("div");
 previewHead.className = "preview-head";
 const previewTitle = document.createElement("div");
@@ -362,8 +379,8 @@ previewTitle.className = "preview-title";
 const previewCopy = document.createElement("button");
 previewCopy.type = "button";
 previewCopy.className = "preview-copy";
-previewCopy.textContent = "复制";
-previewCopy.setAttribute("aria-label", "复制 Preview 正文");
+previewCopy.textContent = t(currentLocale, "previewCopy");
+previewCopy.setAttribute("aria-label", t(currentLocale, "previewCopyAria"));
 previewCopy.addEventListener("click", () => { void copyPreview(); });
 previewHead.append(previewTitle, previewCopy);
 const previewMeta = document.createElement("div");
@@ -375,7 +392,7 @@ previewStatus.setAttribute("aria-live", "polite");
 const previewBody = document.createElement("pre");
 previewBody.className = "preview-body";
 previewBody.tabIndex = 0;
-previewBody.setAttribute("aria-label", "Preview 正文");
+previewBody.setAttribute("aria-label", t(currentLocale, "previewBodyAria"));
 previewPanel.append(previewHead, previewMeta, previewStatus, previewBody);
 
 const placeholder = document.createElement("div");
@@ -388,7 +405,7 @@ const placeholderActions = document.createElement("div");
 placeholderActions.className = "placeholder-actions";
 placeholderActions.hidden = true;
 const placeholderRetry = mountButton(placeholderActions, {
-  label: "重试",
+  label: t(currentLocale, "retry"),
   variant: "outline",
   size: "xs",
   onClick: () => manualRefresh(),
@@ -411,6 +428,7 @@ status.append(dot, statusText);
 
 root.append(head, bannerSlot, versionSlot, usage, mapCard, breakdownCard, placeholder, status);
 
+let panelState: PanelState = { kind: "checking" };
 let session: SessionSnapshot | null = null;
 let connected = false;
 let booted = false;
@@ -531,38 +549,73 @@ window.addEventListener("resize", () => {
 });
 
 renderStatus({ kind: "checking" });
-showPlaceholder("正在连接 Collector…", "首次打开面板时，本地 Service 可能需要一点时间启动。");
+showPlaceholder(
+  t(currentLocale, "connectingTitle"),
+  t(currentLocale, "connectingDetail"),
+);
 
 function versionLabel(version: string): string {
   return version.startsWith("v") ? version : `v${version}`;
 }
 
 function renderStatus(state: PanelState): void {
+  panelState = state;
   status.dataset.state = state.kind;
   if (state.kind === "checking") {
-    statusTitle.textContent = "正在连接本地 Service…";
-    statusDetail.textContent = "首次打开面板时，Service 可能需要一点时间启动。";
+    statusTitle.textContent = t(currentLocale, "statusCheckingTitle");
+    statusDetail.textContent = t(currentLocale, "statusCheckingDetail");
     return;
   }
   if (state.kind === "connected") {
-    statusTitle.textContent = `Collector 已连接 · ${versionLabel(state.version)}`;
+    statusTitle.textContent = t(currentLocale, "statusConnectedTitle", {
+      version: versionLabel(state.version),
+    });
     statusDetail.textContent = state.outdated
-      ? `Collector 版本过旧，扩展期望 ${versionLabel(state.expectedVersion ?? COLLECTOR_VERSION)}。`
-      : "快照会通过本地 Service 读取，bearer 不会进入面板。";
+      ? t(currentLocale, "statusOutdatedDetail", {
+        expected: versionLabel(state.expectedVersion ?? COLLECTOR_VERSION),
+      })
+      : t(currentLocale, "statusConnectedDetail");
     return;
   }
   if (state.kind === "disconnected") {
     if (state.reason === "unreachable") {
-      statusTitle.textContent = "Collector 没有响应";
-      statusDetail.textContent = "发现文件存在，但 Collector 没有响应。重启 OpenCode 后再试。";
+      statusTitle.textContent = t(currentLocale, "collectorUnreachableTitle");
+      statusDetail.textContent = t(currentLocale, "collectorUnreachableDetail");
     } else {
-      statusTitle.textContent = "Collector 未运行";
-      statusDetail.textContent = `没有找到 Discovery file。把 Collector 安装到 ${COLLECTOR_INSTALL_PATH} 后重启 OpenCode。`;
+      statusTitle.textContent = t(currentLocale, "collectorNotRunning");
+      statusDetail.textContent = t(currentLocale, "collectorNotRunningDetail", {
+        path: COLLECTOR_INSTALL_PATH,
+      });
     }
     return;
   }
-  statusTitle.textContent = state.title;
-  statusDetail.textContent = state.detail;
+  statusTitle.textContent = t(currentLocale, state.titleKey);
+  statusDetail.textContent = t(currentLocale, state.detailKey);
+}
+
+function renderStaticCopy(): void {
+  title.textContent = t(currentLocale, "mapTitle");
+  subtitle.textContent = t(currentLocale, "panelSubtitle");
+  refreshButton.update({ label: t(currentLocale, "refresh") });
+  usageTitle.textContent = t(currentLocale, "usageTitle");
+  estimatedSlot.title = t(currentLocale, "estimatedTitle");
+  estimatedBadge.update({ label: t(currentLocale, "estimatedBadge") });
+  assumedSlot.title = t(currentLocale, "assumedWindowTitle");
+  assumedBadge.update({ label: t(currentLocale, "assumedWindowBadge") });
+  mapTitle.textContent = t(currentLocale, "mapTitle");
+  mapHint.textContent = t(currentLocale, "mapHint");
+  mapGrid.setAttribute("aria-label", t(currentLocale, "mapAria"));
+  windowTrack.setAttribute("aria-label", t(currentLocale, "usedLabel"));
+  breakdownTitle.textContent = t(currentLocale, "breakdownTitle");
+  backButton.textContent = t(currentLocale, "back");
+  previewPanel.setAttribute("aria-label", t(currentLocale, "previewAria"));
+  previewCopy.textContent = t(currentLocale, "previewCopy");
+  previewCopy.setAttribute("aria-label", t(currentLocale, "previewCopyAria"));
+  previewBody.setAttribute("aria-label", t(currentLocale, "previewBodyAria"));
+  renderVersionBanner();
+  renderRefreshBanner();
+  renderStatus(panelState);
+  mapSignature = null;
 }
 
 function failureOf(error: unknown): HostFailureCopy {
@@ -583,8 +636,11 @@ function renderVersionBanner(): void {
   if (collectorOutdated === null) return;
   versionBanner.update({
     tone: "warning",
-    title: "collector 版本过旧",
-    body: `Collector 运行 ${versionLabel(collectorOutdated.version)}，扩展期望 ${versionLabel(collectorOutdated.expectedVersion)}。请手动更新 Collector；不会自动更新。`,
+    title: t(currentLocale, "versionOutdatedTitle"),
+    body: t(currentLocale, "versionOutdatedBody", {
+      version: versionLabel(collectorOutdated.version),
+      expected: versionLabel(collectorOutdated.expectedVersion),
+    }),
   });
 }
 
@@ -615,28 +671,39 @@ function renderContent(): void {
   renderUpdated();
   renderVersionBanner();
   if (!booted) {
-    showPlaceholder("正在连接 Collector…", "首次打开面板时，本地 Service 可能需要一点时间启动。");
+    showPlaceholder(
+      t(currentLocale, "connectingTitle"),
+      t(currentLocale, "connectingDetail"),
+    );
     return;
   }
   if (!session) {
-    showPlaceholder("没有打开的 session", "打开一个 session 后，这里会显示它的上下文占用。", true);
+    showPlaceholder(
+      t(currentLocale, "noSessionTitle"),
+      t(currentLocale, "noSessionDetail"),
+      true,
+    );
     return;
   }
   if (hostProblem !== null) {
-    showPlaceholder(hostProblem.title, hostProblem.detail, true);
+    showPlaceholder(
+      t(currentLocale, hostProblem.titleKey),
+      t(currentLocale, hostProblem.detailKey),
+      true,
+    );
     return;
   }
   if (!connected) {
     if (collectorReason === "unreachable") {
       showPlaceholder(
-        "Collector 没有响应",
-        "发现文件存在，但 Collector 没有响应。重启 OpenCode 后再试。",
+        t(currentLocale, "collectorUnreachableTitle"),
+        t(currentLocale, "collectorUnreachableDetail"),
         true,
       );
     } else {
       showPlaceholder(
-        "Collector 未运行",
-        `没有找到 Discovery file。把 Collector 安装到 ${COLLECTOR_INSTALL_PATH} 后重启 OpenCode。`,
+        t(currentLocale, "collectorNotRunning"),
+        t(currentLocale, "collectorNotRunningDetail", { path: COLLECTOR_INSTALL_PATH }),
         true,
       );
     }
@@ -644,18 +711,20 @@ function renderContent(): void {
   }
   if (summaryProblem !== null) {
     showPlaceholder(
-      summaryProblem === "timeout" ? "Collector 没有及时响应" : "快照暂时不可用",
       summaryProblem === "timeout"
-        ? "Service 等待 Collector 超时，稍后会自动重试。"
-        : "Collector 返回了意外结果，稍后会自动重试。",
+        ? t(currentLocale, "summaryTimeoutTitle")
+        : t(currentLocale, "summaryUnavailableTitle"),
+      summaryProblem === "timeout"
+        ? t(currentLocale, "summaryTimeoutDetail")
+        : t(currentLocale, "summaryUnavailableDetail"),
       true,
     );
     return;
   }
   if (!summary || summary.sessionID !== session.id) {
     showPlaceholder(
-      "还没有请求记录",
-      "Collector 已连接。在当前 session 发起一次请求后，这里会显示最后一次请求的构成。",
+      t(currentLocale, "waitingForFirstRequestTitle"),
+      t(currentLocale, "waitingForFirstRequestDetail"),
       true,
     );
     return;
@@ -664,7 +733,7 @@ function renderContent(): void {
 }
 
 function formatNumber(value: number): string {
-  return new Intl.NumberFormat("zh-CN").format(value);
+  return new Intl.NumberFormat(currentLocale === "zh" ? "zh-CN" : "en-US").format(value);
 }
 
 function formatPercent(value: number): string {
@@ -689,7 +758,7 @@ function renderUpdated(): void {
   const date = new Date(collectedAt);
   if (Number.isNaN(date.getTime())) {
     updated.hidden = false;
-    updated.textContent = `更新于 ${collectedAt}`;
+    updated.textContent = t(currentLocale, "updatedToday", { clock: collectedAt });
     updated.title = collectedAt;
     return;
   }
@@ -701,9 +770,15 @@ function renderUpdated(): void {
   const clock = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
   updated.hidden = false;
   updated.textContent = sameDay
-    ? `更新于 ${clock}`
-    : `更新于 ${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
-  updated.title = `采集于 ${date.toLocaleString("zh-CN", { hour12: false })}`;
+    ? t(currentLocale, "updatedToday", { clock })
+    : t(currentLocale, "updatedOtherDay", {
+      month: date.getMonth() + 1,
+      day: date.getDate(),
+      clock,
+    });
+  updated.title = t(currentLocale, "collectedAtTitle", {
+    date: date.toLocaleString(currentLocale === "zh" ? "zh-CN" : "en-US", { hour12: false }),
+  });
 }
 
 function snapshotSignature(next: SnapshotSummary): string {
@@ -729,13 +804,17 @@ function cellBackground(cell: MapCell): string {
   return `linear-gradient(135deg, ${stops.join(", ")})`;
 }
 
+function categoryLabel(category: Category): string {
+  return t(currentLocale, CATEGORY_LABEL_KEYS[category]);
+}
+
 function cellLabel(cell: MapCell): string {
   return cell.segments
     .map(
       (segment) =>
-        `${CATEGORY_LABELS[segment.category]} ${formatNumber(Math.round(segment.tokens))} tokens`,
+        `${categoryLabel(segment.category)} ${formatNumber(Math.round(segment.tokens))} tokens`,
     )
-    .join("；");
+    .join(t(currentLocale, "listSeparator"));
 }
 
 function renderMap(next: SnapshotSummary): void {
@@ -747,11 +826,13 @@ function renderMap(next: SnapshotSummary): void {
   windowUsedBar.dataset.over = bar.over ? "true" : "false";
   windowTrack.setAttribute("aria-valuenow", String(Math.round(bar.fraction * 100)));
   windowTrack.setAttribute("aria-valuetext", `${formatPercent(bar.fraction * 100)}%`);
-  windowCaptionUsed.textContent =
-    `已用 ${formatNumber(bar.used)} / ${formatNumber(bar.window)} tokens`;
+  windowCaptionUsed.textContent = t(currentLocale, "usedCaption", {
+    used: formatNumber(bar.used),
+    window: formatNumber(bar.window),
+  });
   windowCaptionFree.textContent = bar.over
-    ? `Free space ${formatNumber(bar.free)} tokens · 已超出窗口`
-    : `Free space ${formatNumber(bar.free)} tokens`;
+    ? `${t(currentLocale, "freeCaption", { tokens: formatNumber(bar.free) })} · ${t(currentLocale, "overWindow")}`
+    : t(currentLocale, "freeCaption", { tokens: formatNumber(bar.free) });
   windowCaptionFree.classList.toggle("is-over", bar.over);
 
   hoveredCell = null;
@@ -763,7 +844,7 @@ function renderMap(next: SnapshotSummary): void {
   const hasCells = layout.cells.length > 0;
   mapGrid.hidden = !hasCells;
   mapEmpty.hidden = hasCells;
-  mapHint.textContent = hasCells ? "悬停或点击格子查看分类" : "没有可绘制的已用上下文";
+  mapHint.textContent = t(currentLocale, "mapHint");
 
   for (const cell of layout.cells) {
     const button = document.createElement("button");
@@ -811,7 +892,7 @@ function showTooltip(cell: MapCell, element: HTMLButtonElement): void {
     dot.className = "swatch";
     dot.style.background = `var(--cat-${segment.category})`;
     const name = document.createElement("span");
-    name.textContent = CATEGORY_LABELS[segment.category];
+    name.textContent = categoryLabel(segment.category);
     const tokens = document.createElement("span");
     tokens.className = "tip-tokens";
     tokens.textContent = `${formatNumber(Math.round(segment.tokens))} tokens`;
@@ -823,7 +904,7 @@ function showTooltip(cell: MapCell, element: HTMLButtonElement): void {
   mapHint.textContent = cell.segments
     .map(
       (segment) =>
-        `${CATEGORY_LABELS[segment.category]} ${formatNumber(Math.round(segment.tokens))}`,
+        `${categoryLabel(segment.category)} ${formatNumber(Math.round(segment.tokens))}`,
     )
     .join(" · ");
   positionTooltip(element);
@@ -848,9 +929,7 @@ function hideTooltip(): void {
   mapTip.hidden = true;
   mapTip.replaceChildren();
   if (!mapCard.hidden) {
-    mapHint.textContent = currentLayout && currentLayout.cells.length > 0
-      ? "悬停或点击格子查看分类"
-      : "没有可绘制的已用上下文";
+    mapHint.textContent = t(currentLocale, "mapHint");
   }
 }
 
@@ -886,7 +965,7 @@ function resetCopyFeedback(): void {
     window.clearTimeout(copyTimer);
     copyTimer = null;
   }
-  previewCopy.textContent = "复制";
+  previewCopy.textContent = t(currentLocale, "previewCopy");
   previewStatus.textContent = "";
   previewStatus.dataset.tone = "";
 }
@@ -994,20 +1073,23 @@ function renderBreakdown(): void {
     swatch.className = "swatch";
     swatch.style.background = `var(--cat-${category})`;
     const name = document.createElement("span");
-    name.textContent = CATEGORY_LABELS[category];
+    name.textContent = categoryLabel(category);
     drillTitle.append(swatch, name);
     const drillMeta = document.createElement("div");
     drillMeta.className = "drill-meta";
     drillMeta.textContent = row
-      ? `${formatNumber(row.items)} 条 · ${formatNumber(row.tokens)} tokens`
-      : `${formatNumber(items.length)} 条`;
+      ? t(currentLocale, "drillMeta", {
+        items: formatNumber(row.items),
+        tokens: formatNumber(row.tokens),
+      })
+      : t(currentLocale, "drillItems", { items: formatNumber(items.length) });
     drill.append(drillTitle, drillMeta);
     breakdownBody.append(drill);
 
     if (items.length === 0) {
       const empty = document.createElement("div");
       empty.className = "drill-empty";
-      empty.textContent = "这个分类没有可列出的条目。";
+      empty.textContent = t(currentLocale, "drillEmpty");
       breakdownBody.append(empty);
       return;
     }
@@ -1019,11 +1101,13 @@ function renderBreakdown(): void {
       itemRow.dataset.itemId = entry.id;
       const itemTitle = document.createElement("div");
       itemTitle.className = "item-title";
-      itemTitle.textContent = entry.title || "未命名条目";
+      itemTitle.textContent = entry.title || t(currentLocale, "unnamedItem");
       itemTitle.title = entry.title;
       const itemMeta = document.createElement("div");
       itemMeta.className = "item-meta";
-      itemMeta.textContent = `${formatNumber(entry.chars)} 字符`;
+      itemMeta.textContent = t(currentLocale, "itemChars", {
+        chars: formatNumber(entry.chars),
+      });
       itemRow.append(itemTitle, itemMeta);
       itemRow.addEventListener("click", () => { void openPreview(entry); });
       itemRow.addEventListener("focus", () => {
@@ -1051,10 +1135,13 @@ function renderBreakdown(): void {
     swatch.style.background = `var(--cat-${entry.category})`;
     const name = document.createElement("span");
     name.className = "row-name";
-    name.textContent = CATEGORY_LABELS[entry.category];
+    name.textContent = categoryLabel(entry.category);
     const meta = document.createElement("span");
     meta.className = "row-meta";
-    meta.textContent = `${formatNumber(entry.items)} 条 · ${formatNumber(entry.tokens)} tokens`;
+    meta.textContent = t(currentLocale, "drillMeta", {
+      items: formatNumber(entry.items),
+      tokens: formatNumber(entry.tokens),
+    });
     row.append(swatch, name, meta);
     row.addEventListener("click", () => selectCategory(entry.category));
     list.append(row);
@@ -1067,12 +1154,12 @@ function renderBreakdown(): void {
   freeSwatch.style.background = "var(--cat-free)";
   const freeName = document.createElement("span");
   freeName.className = "row-name";
-  freeName.textContent = "Free space";
+  freeName.textContent = t(currentLocale, "freeSpace");
   const freeMeta = document.createElement("span");
   freeMeta.className = "row-meta";
   const bar = windowBar(summary.used, summary.window);
   freeMeta.textContent = bar.over
-    ? `${formatNumber(bar.free)} tokens · 已超出窗口`
+    ? `${formatNumber(bar.free)} tokens · ${t(currentLocale, "overWindow")}`
     : `${formatNumber(bar.free)} tokens`;
   freeMeta.classList.toggle("is-over", bar.over);
   free.append(freeSwatch, freeName, freeMeta);
@@ -1083,16 +1170,18 @@ function renderBreakdown(): void {
 }
 
 function renderPreview(state: PreviewState): void {
-  previewTitle.textContent = state.title || "未命名条目";
-  const suffix = state.truncated ? ` · 仅显示前 ${formatNumber(PREVIEW_MAX_CHARS)} 字符` : "";
+  previewTitle.textContent = state.title || t(currentLocale, "unnamedItem");
+  const suffix = state.truncated
+    ? t(currentLocale, "previewTruncated", { chars: formatNumber(PREVIEW_MAX_CHARS) })
+    : "";
   previewMeta.textContent =
-    `${CATEGORY_LABELS[state.category]} · ${formatNumber(state.chars)} 字符${suffix}`;
+    `${categoryLabel(state.category)} · ${t(currentLocale, "itemChars", { chars: formatNumber(state.chars) })}${suffix}`;
   previewBody.textContent = state.text;
   previewBody.hidden = state.loading || state.error !== null;
   previewCopy.disabled = state.loading || state.error !== null;
-  previewCopy.textContent = "复制";
+  previewCopy.textContent = t(currentLocale, "previewCopy");
   if (state.loading) {
-    previewStatus.textContent = "正在读取 Preview…";
+    previewStatus.textContent = t(currentLocale, "previewLoading");
     previewStatus.dataset.tone = "";
   } else if (state.error) {
     previewStatus.textContent = state.error;
@@ -1143,7 +1232,7 @@ async function openPreview(entry: ItemSummary): Promise<void> {
       preview = {
         ...preview,
         loading: false,
-        error: "无法读取这条 Item 的 Preview，请稍后重试。",
+        error: t(currentLocale, "previewReadError"),
       };
       renderBreakdown();
       return;
@@ -1151,7 +1240,7 @@ async function openPreview(entry: ItemSummary): Promise<void> {
 
     const detail = parseItemDetail(result.body);
     if (!detail) {
-      preview = { ...preview, loading: false, error: "Preview 数据格式不正确。" };
+      preview = { ...preview, loading: false, error: t(currentLocale, "previewBadFormat") };
       renderBreakdown();
       return;
     }
@@ -1173,7 +1262,7 @@ async function openPreview(entry: ItemSummary): Promise<void> {
     preview = {
       ...preview,
       loading: false,
-      error: "无法读取这条 Item 的 Preview，请稍后重试。",
+      error: t(currentLocale, "previewReadError"),
     };
     renderBreakdown();
   }
@@ -1183,7 +1272,7 @@ async function handlePreviewMissing(request: number): Promise<void> {
   if (request !== previewRequest) return;
   preview = null;
   previewRequest += 1;
-  notice = "快照已更新，已刷新";
+  notice = t(currentLocale, "previewMissingNotice");
   resetCopyFeedback();
   const fallback = focusedItemFallback;
   renderBreakdown();
@@ -1212,18 +1301,18 @@ async function copyPreview(): Promise<void> {
   if (preview?.itemId !== itemId) return;
 
   if (copied) {
-    previewStatus.textContent = "已复制 Preview 正文。";
+    previewStatus.textContent = t(currentLocale, "previewCopied");
     previewStatus.dataset.tone = "ok";
-    previewCopy.textContent = "已复制";
+    previewCopy.textContent = t(currentLocale, "previewCopiedButton");
     if (copyTimer !== null) window.clearTimeout(copyTimer);
     copyTimer = window.setTimeout(() => {
-      previewCopy.textContent = "复制";
+      previewCopy.textContent = t(currentLocale, "previewCopy");
       copyTimer = null;
     }, 1_500);
     return;
   }
 
-  previewStatus.textContent = "复制失败，请手动选择 Preview 正文。";
+  previewStatus.textContent = t(currentLocale, "previewCopyFailed");
   previewStatus.dataset.tone = "error";
 }
 
@@ -1282,7 +1371,7 @@ function renderSummary(next: SnapshotSummary): void {
   progress.update({
     value: percent,
     tone: percent >= 85 ? "error" : percent >= 60 ? "warning" : "primary",
-    label: "已用",
+    label: t(currentLocale, "usedLabel"),
   });
 
   estimatedSlot.hidden = !next.estimated;
@@ -1342,6 +1431,7 @@ function parseSummary(body: string): SnapshotSummary | null {
       || !isFiniteNumber(value.window)
       || typeof value.windowAssumed !== "boolean"
       || typeof value.estimated !== "boolean"
+      || (value.baseline !== undefined && typeof value.baseline !== "boolean")
       || typeof value.collectedAt !== "string"
       || !Array.isArray(value.categories)
       || !value.categories.every(isCategoryUsage)
@@ -1350,7 +1440,8 @@ function parseSummary(body: string): SnapshotSummary | null {
     ) {
       return null;
     }
-    return value as unknown as SnapshotSummary;
+    const parsed = value as unknown as SnapshotSummary;
+    return { ...parsed, baseline: value.baseline === true };
   } catch {
     return null;
   }
@@ -1409,10 +1500,12 @@ function renderRefreshBanner(): void {
   if (next !== null) {
     // 请求在途时收起 banner 的重试入口，避免和顶部/占位区按钮重复触发。
     banner.update({
-      ...next,
+      tone: next.tone,
+      title: t(currentLocale, next.titleKey),
+      body: t(currentLocale, next.bodyKey),
       action: manualLoading || refreshInFlight
         ? undefined
-        : { label: "重试", onClick: () => manualRefresh() },
+        : { label: t(currentLocale, "retry"), onClick: () => manualRefresh() },
     });
   }
 }
@@ -1423,7 +1516,7 @@ function syncRetryControls(): void {
   placeholderRetry.update({
     disabled: busy,
     loading: manualLoading,
-    label: manualLoading ? "重试中…" : "重试",
+    label: manualLoading ? t(currentLocale, "retrying") : t(currentLocale, "retry"),
   });
   renderRefreshBanner();
 }
@@ -1523,9 +1616,13 @@ function noteUnreachable(error: unknown, unexpected = false): void {
   collectorReason = null;
   collectorOutdated = null;
   hostProblem = unexpected
-    ? { title: "Service 返回了意外结果", detail: "请稍后重试，或重新加载面板。" }
+    ? { titleKey: "unexpectedServiceTitle", detailKey: "unexpectedServiceDetail" }
     : failureOf(error);
-  renderStatus({ kind: "failed", ...hostProblem });
+  renderStatus({
+    kind: "failed",
+    titleKey: hostProblem.titleKey,
+    detailKey: hostProblem.detailKey,
+  });
   renderContent();
 }
 
@@ -1691,6 +1788,12 @@ host.onSessionLifecycle((event) => {
 
 host.onReady((context) => {
   applyHostReady(context, document.documentElement);
+  const locale = resolveLocale(context.locale);
+  if (locale !== currentLocale) {
+    currentLocale = locale;
+    renderStaticCopy();
+    renderContent();
+  }
   setSession(context.session);
   if (started) {
     reconcilePolling();

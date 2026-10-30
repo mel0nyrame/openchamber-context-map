@@ -1,30 +1,21 @@
+import type { MessageKey } from "./i18n.ts";
+
+/** host 层错误只返回文案 key，面板按当前 locale 渲染。 */
 export interface HostFailureCopy {
-  title: string;
-  detail: string;
+  titleKey: MessageKey;
+  detailKey: MessageKey;
 }
 
-/** 把 host 层的错误码翻译成面板文案；未知错误统一指向 Settings → Extensions。 */
+/** 把 host 层的错误码映射到面板文案 key；未知错误统一指向 Settings → Extensions。 */
 export function describeHostFailure(code: string | null): HostFailureCopy {
   if (code === "NO_SERVICE" || code === "NOT_GRANTED") {
-    return {
-      title: "Service 未就绪",
-      detail: "在 Settings → Extensions 中授权并启用 Context Map 的 Service。",
-    };
+    return { titleKey: "hostNoServiceTitle", detailKey: "hostNoServiceDetail" };
   }
   if (code === "DISABLED") {
-    return {
-      title: "Context Map 已暂停",
-      detail: "在 Settings → Extensions 中重新启用。",
-    };
+    return { titleKey: "hostDisabledTitle", detailKey: "hostDisabledDetail" };
   }
   if (code === "SERVICE_FAILED") {
-    return {
-      title: "Service 已停止",
-      detail: "在 Settings → Extensions 中重新启用，或重启 OpenChamber。",
-    };
+    return { titleKey: "hostStoppedTitle", detailKey: "hostStoppedDetail" };
   }
-  return {
-    title: "无法连接 Service",
-    detail: "请确认 OpenChamber 正在运行，然后在 Settings → Extensions 中检查 Context Map。",
-  };
+  return { titleKey: "hostUnavailableTitle", detailKey: "hostUnavailableDetail" };
 }
