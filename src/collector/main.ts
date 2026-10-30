@@ -71,7 +71,12 @@ const collector: CollectorPlugin = {
     const resolveBaselineTemplate = async (sessionID: string): Promise<BaselineTemplate | null> => {
       const get = context.session?.get;
       if (!get) return null;
-      const info = (await get.call(context.session, { sessionID })) as SessionInfo | null | undefined;
+      let info: SessionInfo | null | undefined;
+      try {
+        info = (await get.call(context.session, { sessionID })) as SessionInfo | null | undefined;
+      } catch {
+        return null;
+      }
       const agent = typeof info?.agent === "string" ? info.agent : "";
       const ref = info?.model;
       if (!agent || !ref || typeof ref.providerID !== "string" || typeof ref.modelID !== "string") {
