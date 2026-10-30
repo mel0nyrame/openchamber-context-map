@@ -9,7 +9,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import collector from "../src/collector/main.ts";
-import { SERVICE_PORT_ENV, SERVICE_TOKEN_ENV } from "../src/shared/version.ts";
+import {
+  COLLECTOR_VERSION,
+  SERVICE_PORT_ENV,
+  SERVICE_TOKEN_ENV,
+} from "../src/shared/version.ts";
 
 const CHANNEL = "openchamber.sdk";
 const API_VERSION = 1;
@@ -196,6 +200,9 @@ const serviceToken = randomBytes(32).toString("hex");
 const servicePort = await freePort();
 
 let service: ReturnType<typeof spawn> | null = null;
+let hostError: string | null = null;
+let collectorStuck = false;
+let collectorOutdated = false;
 
 async function startService(): Promise<void> {
   if (service) return;
@@ -339,10 +346,18 @@ const harness = `<!doctype html>
   <span class="sep">|</span>
   <button data-action="request">模拟请求</button>
   <button data-action="panel-refresh">刷新面板</button>
+  <button data-action="double-refresh">连点两次</button>
   <button data-action="service-down">停 Service</button>
   <button data-action="service-up">起 Service</button>
   <button data-action="collector-down">停 Collector</button>
   <button data-action="collector-up">起 Collector</button>
+  <span class="sep">|</span>
+  <button data-action="host-no-service">NO_SERVICE</button>
+  <button data-action="host-not-granted">NOT_GRANTED</button>
+  <button data-action="host-disabled">DISABLED</button>
+  <button data-action="stuck">Collector 卡住</button>
+  <button data-action="outdated">版本过旧</button>
+  <button data-action="fault-reset">恢复故障</button>
   <span id="devstate"></span>
 </div>
 <iframe id="panel" src="/panel/index.html"></iframe>
@@ -359,6 +374,10 @@ const harness = `<!doctype html>
   };
   let currentName = "Session A";
   let current = { ...sessions.a };
+  let hostError = null;
+  let collectorStuck = false;
+  let collectorOutdated = false;
+  let summaryRequests = 0;
   const ready = {
     channel: CHANNEL,
     v: API_VERSION,
@@ -382,9 +401,21 @@ const harness = `<!doctype html>
     ...ready,
     payload: { ...ready.payload, session: current },
   }, "*");
+  const findPanelRefresh = () => frame.contentDocument
+    ? Array.from(frame.contentDocument.querySelectorAll("button"))
+      .find((node) => node.textContent.trim() === "刷新")
+    : null;
   const renderState = (note) => {
     const base = current ? currentName + " · " + (current.busy ? "busy" : "idle") : "无 session";
-    stateLabel.textContent = base + (note ? " · " + note : "");
+    const panelRefreshButton = findPanelRefresh();
+    const flags = [
+      hostError ? "host:" + hostError : null,
+      collectorStuck ? "Collector 卡住" : null,
+      collectorOutdated ? "版本过旧" : null,
+      summaryRequests > 0 ? "summary 请求 " + summaryRequests : null,
+      panelRefreshButton && panelRefreshButton.disabled ? "刷新按钮已禁用" : null,
+    ].filter(Boolean).join("，");
+    stateLabel.textContent = base + (note ? " · " + note : "") + (flags ? " · " + flags : "");
   };
 
   const reply = (id, payload) => frame.contentWindow.postMessage({
@@ -411,6 +442,19 @@ const harness = `<!doctype html>
 
     if (message.type === "service-request") {
       const request = message.payload;
+      if (request.path === "/summary") summaryRequests += 1;
+      if (hostError) {
+        frame.contentWindow.postMessage({
+          channel: CHANNEL, v: API_VERSION, type: "result", id: message.id,
+          ok: false, code: hostError, error: "开发控制栏模拟的 host 错误",
+        }, "*");
+        return;
+      }
+      if (collectorStuck && request.path === "/summary") {
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+        reply(message.id, { status: 504, body: JSON.stringify({ error: "collector_timeout" }) });
+        return;
+      }
       try {
         const init = { method: request.method || "GET" };
         if (request.body !== undefined) {
@@ -420,6 +464,19 @@ const harness = `<!doctype html>
         const query = request.query ? "?" + new URLSearchParams(request.query).toString() : "";
         const response = await fetch("/__service?path=" + encodeURIComponent(request.path + query), init);
         const result = await response.json();
+        if (collectorOutdated && request.path === "/health" && result.status === 200) {
+          try {
+            const body = JSON.parse(result.body);
+            if (body.collector && body.collector.connected) {
+              body.collector.version = "0.0.9";
+              body.collector.outdated = true;
+              body.collector.expectedVersion = ${JSON.stringify(COLLECTOR_VERSION)};
+              result.body = JSON.stringify(body);
+            }
+          } catch {
+            // 保持原响应，方便排查。
+          }
+        }
         reply(message.id, { status: result.status, body: result.body });
       } catch (error) {
         frame.contentWindow.postMessage({
@@ -462,11 +519,17 @@ const harness = `<!doctype html>
         note = "已触发采集";
       }
     } else if (action === "panel-refresh") {
-      const button = Array.from(frame.contentDocument.querySelectorAll("button"))
-        .find((node) => node.textContent.trim() === "刷新");
+      const button = findPanelRefresh();
       if (button) {
         button.click();
         note = "已点面板刷新";
+      }
+    } else if (action === "double-refresh") {
+      const button = findPanelRefresh();
+      if (button) {
+        button.click();
+        button.click();
+        note = "已连点两次";
       }
     } else if (action === "service-down") {
       await fetch("/__dev/service/down", { method: "POST" });
@@ -480,6 +543,27 @@ const harness = `<!doctype html>
     } else if (action === "collector-up") {
       await fetch("/__dev/collector/up", { method: "POST" });
       note = "Collector 已起";
+    } else if (action === "host-no-service" || action === "host-not-granted" || action === "host-disabled") {
+      const code = action === "host-no-service"
+        ? "NO_SERVICE"
+        : action === "host-not-granted" ? "NOT_GRANTED" : "DISABLED";
+      await fetch("/__dev/fault?host=" + code, { method: "POST" });
+      hostError = code;
+      note = "host: " + code;
+    } else if (action === "stuck") {
+      await fetch("/__dev/fault?stuck=1", { method: "POST" });
+      collectorStuck = true;
+      note = "Collector 卡住";
+    } else if (action === "outdated") {
+      await fetch("/__dev/fault?outdated=1", { method: "POST" });
+      collectorOutdated = true;
+      note = "版本过旧";
+    } else if (action === "fault-reset") {
+      await fetch("/__dev/fault?reset=1", { method: "POST" });
+      hostError = null;
+      collectorStuck = false;
+      collectorOutdated = false;
+      note = "故障已恢复";
     }
     renderState(note);
   });
@@ -527,6 +611,20 @@ const preview = Bun.serve({
       } catch (error) {
         return Response.json({ ok: false, error: String(error) }, { status: 500 });
       }
+    }
+    if (path === "/__dev/fault" && request.method === "POST") {
+      if (url.searchParams.get("reset") === "1") {
+        hostError = null;
+        collectorStuck = false;
+        collectorOutdated = false;
+      }
+      const host = url.searchParams.get("host");
+      if (host !== null) hostError = host;
+      const stuck = url.searchParams.get("stuck");
+      if (stuck !== null) collectorStuck = stuck === "1";
+      const outdated = url.searchParams.get("outdated");
+      if (outdated !== null) collectorOutdated = outdated === "1";
+      return Response.json({ ok: true, hostError, collectorStuck, collectorOutdated });
     }
     if (path === "/__service") {
       const target = url.searchParams.get("path") ?? "/";
