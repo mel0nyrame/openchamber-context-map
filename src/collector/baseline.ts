@@ -1,5 +1,5 @@
 import type { Category, CategoryUsage, SnapshotSummary } from "../shared/types.ts";
-import type { ModelRef } from "./opencode.ts";
+import { modelRefID, type ModelRef } from "./opencode.ts";
 import { CHARS_PER_TOKEN, type SnapshotDraft, type SnapshotItem } from "./snapshot.ts";
 
 /** 最多保留 5 个 agent + model 组合的模板。 */
@@ -17,7 +17,7 @@ export interface BaselineTemplate {
 
 /** agent 与 model 共同决定请求装配；缺一不可。 */
 export function baselineKey(agent: string, ref: ModelRef): string {
-  return `${agent}\u0000${ref.providerID}/${ref.modelID}`;
+  return `${agent}\u0000${ref.providerID}/${modelRefID(ref)}`;
 }
 
 export class BaselineStore {

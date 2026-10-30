@@ -1,4 +1,4 @@
-import type { ModelInfo, ModelRef, PluginContext, SessionMessageInfo } from "./opencode.ts";
+import { modelRefID, type ModelInfo, type ModelRef, type PluginContext, type SessionMessageInfo } from "./opencode.ts";
 import { DEFAULT_WINDOW, finalizeSnapshot } from "./snapshot.ts";
 import type { SnapshotStore, StoredSnapshot } from "./store.ts";
 
@@ -38,7 +38,7 @@ export class WindowResolver {
   constructor(private readonly context: PluginContext) {}
 
   async resolve(ref: ModelRef): Promise<{ window: number; assumed: boolean }> {
-    const key = `${ref.providerID}/${ref.modelID}`;
+    const key = `${ref.providerID}/${modelRefID(ref)}`;
     const cached = this.#cache.get(key);
     if (cached !== undefined) return { window: cached, assumed: false };
 
@@ -66,14 +66,18 @@ export class WindowResolver {
         const window = model.limit?.context;
         if (
           typeof model.providerID !== "string"
-          || typeof model.modelID !== "string"
           || typeof window !== "number"
           || !Number.isFinite(window)
           || window <= 0
         ) {
           continue;
         }
-        this.#cache.set(`${model.providerID}/${model.modelID}`, window);
+        // Info 同时有 id 与 modelID；两者在实践中相同，都缓存以兼容 Ref。
+        for (const id of new Set([model.id, model.modelID])) {
+          if (typeof id === "string" && id) {
+            this.#cache.set(`${model.providerID}/${id}`, window);
+          }
+        }
       }
     })().then(
       () => { this.#loading = null; },

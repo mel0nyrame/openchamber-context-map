@@ -35,6 +35,17 @@ async function removeDiscovery(file) {
   await rm(file, { force: true });
 }
 
+// src/collector/opencode.ts
+function modelRefID(ref) {
+  if (!ref)
+    return "";
+  if (typeof ref.id === "string" && ref.id)
+    return ref.id;
+  if (typeof ref.modelID === "string" && ref.modelID)
+    return ref.modelID;
+  return "";
+}
+
 // src/shared/types.ts
 var CATEGORIES = [
   "system",
@@ -120,7 +131,7 @@ function measureValue(value, previewLimit) {
 }
 function modelLabel(ref) {
   const provider = typeof ref.providerID === "string" ? ref.providerID : "";
-  const model = typeof ref.modelID === "string" && ref.modelID ? ref.modelID : "unknown";
+  const model = modelRefID(ref) || "unknown";
   return provider ? `${provider}/${model}` : model;
 }
 function buildDraft(context, collectedAt) {
@@ -223,7 +234,7 @@ ${measured.preview}` : name;
     model: modelLabel(context.model),
     modelRef: {
       providerID: context.model.providerID,
-      modelID: context.model.modelID
+      modelID: modelRefID(context.model)
     },
     collectedAt,
     items,
@@ -285,7 +296,7 @@ function finalizeSnapshot(draft, providerUsed, window, windowAssumed) {
 var MAX_BASELINES = 5;
 var BASELINE_CATEGORIES = ["system", "toolDefinitions"];
 function baselineKey(agent, ref) {
-  return `${agent}\x00${ref.providerID}/${ref.modelID}`;
+  return `${agent}\x00${ref.providerID}/${modelRefID(ref)}`;
 }
 
 class BaselineStore {
@@ -371,7 +382,7 @@ class WindowResolver {
     this.context = context;
   }
   async resolve(ref) {
-    const key = `${ref.providerID}/${ref.modelID}`;
+    const key = `${ref.providerID}/${modelRefID(ref)}`;
     const cached = this.#cache.get(key);
     if (cached !== undefined)
       return { window: cached, assumed: false };
@@ -397,10 +408,14 @@ class WindowResolver {
           continue;
         const model = value;
         const window = model.limit?.context;
-        if (typeof model.providerID !== "string" || typeof model.modelID !== "string" || typeof window !== "number" || !Number.isFinite(window) || window <= 0) {
+        if (typeof model.providerID !== "string" || typeof window !== "number" || !Number.isFinite(window) || window <= 0) {
           continue;
         }
-        this.#cache.set(`${model.providerID}/${model.modelID}`, window);
+        for (const id of new Set([model.id, model.modelID])) {
+          if (typeof id === "string" && id) {
+            this.#cache.set(`${model.providerID}/${id}`, window);
+          }
+        }
       }
     })().then(() => {
       this.#loading = null;
@@ -518,7 +533,7 @@ var collector = {
       }
       const agent = typeof info?.agent === "string" ? info.agent : "";
       const ref = info?.model;
-      if (!agent || !ref || typeof ref.providerID !== "string" || typeof ref.modelID !== "string") {
+      if (!agent || !ref || typeof ref.providerID !== "string" || !modelRefID(ref)) {
         return null;
       }
       return baselines.get(agent, ref) ?? null;
