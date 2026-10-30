@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prototype · Context Map v2</title>
+<style>
+  :root {
+    --bg: #0f1216;
+    --card: #161a1f;
+    --card-2: #1c2026;
+    --fg: #e6e9ee;
+    --muted: #9aa3ad;
+    --border: rgba(255, 255, 255, 0.09);
+    --accent: #8fa8c8;
+    --free: #6b7785;
+    --cat-system: #8fa8c8;
+    --cat-toolDefinitions: #7fb8a8;
+    --cat-userMessages: #c8a878;
+    --cat-assistantText: #8fbf8f;
+    --cat-reasoning: #a898c8;
+    --cat-toolCalls: #c88fa0;
+    --cat-toolResults: #88b8c8;
+    --cat-other: #9aa3ad;
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --card: #f7f8fa;
+    --card-2: #eef0f3;
+    --fg: #1c2026;
+    --muted: #5f6873;
+    --border: rgba(16, 22, 30, 0.12);
+    --accent: #4a6588;
+    --free: #7a828c;
+    --cat-system: #4a6588;
+    --cat-toolDefinitions: #3d7a6e;
+    --cat-userMessages: #96683c;
+    --cat-assistantText: #4b7a4b;
+    --cat-reasoning: #705d8c;
+    --cat-toolCalls: #96536a;
+    --cat-toolResults: #3f7484;
+    --cat-other: #6b7280;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 24px 120px;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+  .proto-note {
+    width: 420px;
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+  }
+  .frame {
+    width: min(420px, 100%);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 20px;
+  }
+  .card-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--fg);
+  }
+  .spacer { flex: 1; }
+
+  .meta {
+    color: var(--muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .model {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .usage {
+    margin-top: 10px;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .usage strong { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  .usage .pct { color: var(--muted); font-size: 12px; }
+  .track {
+    margin-top: 8px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--card-2);
+    overflow: hidden;
+    display: flex;
+  }
+  .track span { display: block; height: 100%; }
+
+  .icon-btn {
+    width: 24px;
+    height: 24px;
+    display: inline-grid;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .icon-btn:hover { background: var(--card-2); color: var(--fg); }
+  .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #4caf72;
+    flex: none;
+  }
+  .status-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--muted);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    cursor: default;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 2px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .map-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .zoom {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 10px;
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .zoom:hover { color: var(--fg); border-color: var(--muted); }
+  .zoom b { font-weight: 600; color: var(--fg); }
+
+  .map {
+    display: grid;
+    gap: 2px;
+    justify-content: start;
+  }
+  .cell {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 2px;
+    background: var(--cat-other);
+  }
+  .cell.free {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--muted) 42%, transparent);
+  }
+  .map[data-selected] .cell:not(.free) { opacity: 0.28; }
+  .map[data-selected] .cell.on { opacity: 1; }
+
+  .legend {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    color: var(--muted);
+    font-size: 10.5px;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch { width: 8px; height: 8px; border-radius: 2px; }
+  .swatch.free { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); }
+
+  .rows { display: flex; flex-direction: column; }
+  .row {
+    display: grid;
+    grid-template-columns: 8px 1fr auto auto;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 4px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .row:hover { background: var(--card-2); }
+  .row[aria-pressed="true"] { background: var(--card-2); }
+  .row .name { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .num { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .row.free-row { cursor: default; color: var(--muted); }
+  .row.free-row:hover { background: transparent; }
+  .dot { width: 8px; height: 8px; border-radius: 2px; }
+  .dot.free { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); }
+
+  .footer {
+    color: var(--muted);
+    font-size: 10.5px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .footer .sep { opacity: 0.5; }
+
+  details.status-box {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  details.status-box summary { cursor: pointer; list-style: none; display: flex; gap: 6px; align-items: center; }
+  details.status-box summary::-webkit-details-marker { display: none; }
+  details.status-box p { margin: 6px 0 0; line-height: 1.45; }
+
+  .float-refresh {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: var(--card);
+    border: 1px solid var(--border);
+  }
+  .map-card { position: relative; }
+
+  /* prototype chrome, never part of the product */
+  .controls {
+    position: sticky;
+    top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+    background: rgba(20, 24, 30, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    backdrop-filter: blur(8px);
+    color: #cfd6df;
+    font-size: 11px;
+    max-width: calc(100vw - 32px);
+    z-index: 10;
+  }
+  .controls .group { display: flex; align-items: center; gap: 4px; }
+  .controls .label { opacity: 0.6; padding-right: 2px; }
+  .controls button {
+    font: inherit;
+    color: #cfd6df;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 5px;
+    padding: 3px 7px;
+    cursor: pointer;
+  }
+  .controls button[aria-pressed="true"] { background: #e6e9ee; color: #161a1f; border-color: #e6e9ee; }
+</style>
+</head>
+<body>
+  <div class="proto-note">Prototype · Context Map v2 · 仅用于比较布局与地图，不是产品代码</div>
+  <div class="controls" role="toolbar" aria-label="原型变体">
+    <div class="group"><span class="label">Header</span>
+      <button data-k="header" data-v="A">A</button>
+      <button data-k="header" data-v="B">B</button>
+      <button data-k="header" data-v="C">C</button>
+    </div>
+    <div class="group"><span class="label">Status</span>
+      <button data-k="status" data-v="A">A</button>
+      <button data-k="status" data-v="B">B</button>
+      <button data-k="status" data-v="C">C</button>
+    </div>
+    <div class="group"><span class="label">Grid</span>
+      <button data-k="grid" data-v="25x8">25×8</button>
+      <button data-k="grid" data-v="16x16">16×16</button>
+    </div>
+    <div class="group"><span class="label">Theme</span>
+      <button data-k="theme" data-v="dark">Dark</button>
+      <button data-k="theme" data-v="light">Light</button>
+    </div>
+  </div>
+  <div class="frame" id="panel"></div>
+
+
+<script>
+  const MODEL = "workbuddy-ai/deepseek-v4.1-flash";
+  const WINDOW = 200000;
+  const USED = 85300;
+  const UPDATED = "21:12:41";
+
+  const CATEGORIES = [
+    { id: "toolResults", label: "Tool results", tokens: 62100 },
+    { id: "assistantText", label: "Assistant text", tokens: 6200 },
+    { id: "toolDefinitions", label: "Tool definitions", tokens: 5900 },
+    { id: "reasoning", label: "Reasoning", tokens: 3100 },
+    { id: "toolCalls", label: "Tool calls", tokens: 2700 },
+    { id: "system", label: "System", tokens: 2400 },
+    { id: "userMessages", label: "User messages", tokens: 1800 },
+    { id: "other", label: "Other", tokens: 1100 },
+  ];
+
+  const state = { header: "A", status: "A", grid: "25x8", theme: "dark", zoom: "window", selected: null };
+
+  const fmt = (n) => new Intl.NumberFormat("en-US").format(n);
+  const compact = (n) => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
+  const color = (id) => `var(--cat-${id})`;
+
+  function cellsFor() {
+    return state.grid === "25x8" ? { cols: 25, rows: 8 } : { cols: 16, rows: 16 };
+  }
+
+  function denominator() {
+    if (state.zoom === "window") return WINDOW;
+    return Math.min(WINDOW, Math.max(10000, Math.ceil(USED * 1.15)));
+  }
+
+  function mapModel() {
+    const { cols, rows } = cellsFor();
+    const total = cols * rows;
+    const denom = denominator();
+    const usedCells = Math.min(total, Math.round((USED / denom) * total));
+    const counts = CATEGORIES.map((c) => ({ ...c, cells: Math.floor((c.tokens / USED) * usedCells) }));
+    let assigned = counts.reduce((sum, c) => sum + c.cells, 0);
+    for (let i = 0; assigned < usedCells; i = (i + 1) % counts.length) { counts[i].cells++; assigned++; }
+    const cells = [];
+    for (const c of counts) for (let i = 0; i < c.cells; i++) cells.push(c.id);
+    while (cells.length < total) cells.push("free");
+    return { cols, rows, cells, usedCells, denom };
+  }
+
+  function renderMap() {
+    const m = mapModel();
+    const cells = m.cells.map((id) => id === "free"
+      ? `<div class="cell free"></div>`
+      : `<div class="cell ${state.selected === id ? "on" : ""}" data-cat="${id}" style="background:${color(id)}" title="${CATEGORIES.find(c => c.id === id).label}"></div>`
+    ).join("");
+    return `<div class="map" style="grid-template-columns:repeat(${m.cols},1fr)" ${state.selected ? "data-selected" : ""}>${cells}</div>`;
+  }
+
+  function renderUsage() {
+    const pct = ((USED / WINDOW) * 100).toFixed(1);
+    const segments = CATEGORIES.map(c => `<span style="width:${(c.tokens / WINDOW) * 100}%;background:${color(c.id)}"></span>`).join("");
+    const statusA = state.status === "A" ? `<span class="status-inline" title="Collector v0.1.0 · 通过本地 Service 读取"><i class="status-dot"></i>v0.1.0</span>` : "";
+    const refresh = state.header === "A" ? `<button class="icon-btn" title="刷新" aria-label="刷新">↻</button>` : "";
+    const head = `<div class="card-head"><span class="card-title">Context usage</span><span class="spacer"></span>${statusA}${refresh}</div>`;
+    const model = `<div class="model">${MODEL} · ${compact(USED)}/${compact(WINDOW)} (${pct}%)</div>`;
+    const updated = state.header === "A" ? `<div class="meta" style="margin-top:8px">Updated ${UPDATED}</div>` : "";
+    return `<section class="card">${head}${model}<div class="usage"><strong>${fmt(USED)}</strong><span class="pct">/ ${fmt(WINDOW)} tokens</span><span class="spacer"></span><span class="pct">${pct}%</span></div><div class="track">${segments}</div>${updated}</section>`;
+  }
+
+  function renderMapCard() {
+    const zoomLabel = state.zoom === "window" ? `Window ${compact(WINDOW)}` : `Fit ${compact(denominator())}`;
+    const refresh = state.header === "C" ? `<button class="icon-btn float-refresh" title="刷新" aria-label="刷新">↻</button>` : "";
+    const legend = `<div class="legend"><span><i class="swatch free"></i>Free ${compact(WINDOW - USED)}</span><span><i class="swatch" style="background:${color("toolResults")}"></i>Used ${compact(USED)}</span></div>`;
+    return `<section class="card map-card">${refresh}<div class="map-head"><span class="card-title">Context map</span><span class="spacer"></span><button class="zoom" title="切换 Window / Fit（Z）">Zoom <b>${zoomLabel}</b></button></div>${renderMap()}${legend}</section>`;
+  }
+
+  function renderBreakdown() {
+    const rows = CATEGORIES.map((c) => `<button class="row" data-select="${c.id}" aria-pressed="${state.selected === c.id}"><i class="dot" style="background:${color(c.id)}"></i><span class="name">${c.label}</span><span class="num">${fmt(c.tokens)}</span><span class="num">${((c.tokens / WINDOW) * 100).toFixed(1)}%</span></button>`).join("");
+    const free = `<div class="row free-row"><i class="dot free"></i><span class="name">Free space</span><span class="num">${fmt(WINDOW - USED)}</span><span class="num">${(((WINDOW - USED) / WINDOW) * 100).toFixed(1)}%</span></div>`;
+    return `<section class="card"><div class="card-head"><span class="card-title">Breakdown</span></div><div class="rows" style="margin-top:6px">${rows}${free}</div></section>`;
+  }
+
+  function renderChrome() {
+    if (state.header === "B") {
+      return `<div class="toolbar"><button class="icon-btn" title="刷新" aria-label="刷新">↻</button><span class="spacer"></span><span class="meta">Updated ${UPDATED}</span></div>`;
+    }
+    return "";
+  }
+
+  function renderStatusFooter() {
+    if (state.status === "B") {
+      return `<div class="footer"><i class="status-dot"></i>Collector v0.1.0<span class="sep">·</span>via local service</div>`;
+    }
+    if (state.status === "C") {
+      return `<details class="status-box"><summary><i class="status-dot"></i>Collector connected · v0.1.0</summary><p>快照通过本地 Service 读取，bearer 不会进入面板。最后更新 ${UPDATED}。</p></details>`;
+    }
+    return state.header === "C" ? `<div class="footer">Updated ${UPDATED}</div>` : "";
+  }
+
+  function render() {
+    document.documentElement.dataset.theme = state.theme;
+    document.getElementById("panel").innerHTML = [
+      renderChrome(),
+      renderUsage(),
+      renderMapCard(),
+      renderBreakdown(),
+      renderStatusFooter(),
+    ].join("");
+    for (const b of document.querySelectorAll(".controls button")) {
+      b.setAttribute("aria-pressed", String(state[b.dataset.k] === b.dataset.v));
+    }
+  }
+
+  document.addEventListener("click", (e) => {
+    const variant = e.target.closest(".controls button");
+    if (variant) { state[variant.dataset.k] = variant.dataset.v; render(); return; }
+    if (e.target.closest(".zoom")) { state.zoom = state.zoom === "window" ? "fit" : "window"; render(); return; }
+    const sel = e.target.closest("[data-select]");
+    if (sel) { state.selected = state.selected === sel.dataset.select ? null : sel.dataset.select; render(); }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key.toLowerCase() === "z") { state.zoom = state.zoom === "window" ? "fit" : "window"; render(); }
+  });
+
+  render();
+</script>
+</body>
+</html>

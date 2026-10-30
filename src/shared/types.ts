@@ -37,6 +37,8 @@ export interface SnapshotSummary {
   /** 窗口不是来自模型信息，而是按默认值估算。 */
   windowAssumed: boolean;
   estimated: boolean;
+  /** 该 session 尚无真实快照，内容取自最近一次请求的 system + 工具定义模板。 */
+  baseline: boolean;
   collectedAt: string;
   categories: CategoryUsage[];
   items: ItemSummary[];

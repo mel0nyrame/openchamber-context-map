@@ -232,6 +232,16 @@ ${measured.preview}` : name;
     hasMedia
   };
 }
+function baselineDraft(draft) {
+  const counts = emptyCounts();
+  const chars = emptyCounts();
+  const items = draft.items.filter((item) => item.category === "system" || item.category === "toolDefinitions");
+  for (const item of items) {
+    counts[item.category] += 1;
+    chars[item.category] += item.chars;
+  }
+  return { ...draft, items, counts, chars, hasMedia: false };
+}
 function distribute(raw, target) {
   const total = raw.reduce((sum, value) => sum + value, 0);
   if (total === 0 || target <= 0)
@@ -264,9 +274,69 @@ function finalizeSnapshot(draft, providerUsed, window, windowAssumed) {
     window,
     windowAssumed,
     estimated: providerUsed === null || draft.hasMedia || rawTotal === 0,
+    baseline: false,
     collectedAt: draft.collectedAt,
     categories,
     items: draft.items.map(({ id, title, chars, head }) => ({ id, title, chars, head }))
+  };
+}
+
+// src/collector/baseline.ts
+var MAX_BASELINES = 5;
+var BASELINE_CATEGORIES = ["system", "toolDefinitions"];
+function baselineKey(agent, ref) {
+  return `${agent}\x00${ref.providerID}/${ref.modelID}`;
+}
+
+class BaselineStore {
+  #templates = new Map;
+  remember(agent, draft) {
+    const key = baselineKey(agent, draft.modelRef);
+    this.#templates.delete(key);
+    this.#templates.set(key, {
+      agent,
+      model: draft.model,
+      modelRef: draft.modelRef,
+      collectedAt: draft.collectedAt,
+      items: draft.items
+    });
+    while (this.#templates.size > MAX_BASELINES) {
+      const oldest = this.#templates.keys().next().value;
+      if (oldest === undefined)
+        break;
+      this.#templates.delete(oldest);
+    }
+  }
+  get(agent, ref) {
+    return this.#templates.get(baselineKey(agent, ref));
+  }
+  get size() {
+    return this.#templates.size;
+  }
+}
+function baselineSummary(template, sessionID, window, windowAssumed) {
+  const categories = BASELINE_CATEGORIES.map((category) => {
+    const items = template.items.filter((item) => item.category === category);
+    const chars = items.reduce((sum, item) => sum + item.chars, 0);
+    return {
+      category,
+      items: items.length,
+      chars,
+      tokens: Math.ceil(chars / CHARS_PER_TOKEN)
+    };
+  });
+  const used = categories.reduce((sum, category) => sum + category.tokens, 0);
+  return {
+    sessionID,
+    model: template.model,
+    used,
+    window,
+    windowAssumed,
+    estimated: true,
+    baseline: true,
+    collectedAt: template.collectedAt,
+    categories,
+    items: template.items.map(({ id, title, chars, head }) => ({ id, title, chars, head }))
   };
 }
 
@@ -426,57 +496,94 @@ var collector = {
     const context = rawContext ?? {};
     const token = randomBytes(32).toString("hex");
     const store = new SnapshotStore;
+    const baselines = new BaselineStore;
     const windows = new WindowResolver(context);
     const hook = context.session?.hook ? await context.session.hook("context", (sessionContext) => {
-      const record = store.add(buildDraft(sessionContext, new Date().toISOString()));
+      const draft = buildDraft(sessionContext, new Date().toISOString());
+      if (typeof sessionContext.agent === "string" && sessionContext.agent) {
+        baselines.remember(sessionContext.agent, baselineDraft(draft));
+      }
+      const record = store.add(draft);
       enrichSnapshot(context, store, windows, record).catch(() => {});
     }) : null;
-    const server = createServer((request, response) => {
-      const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      const path = url.pathname;
-      if (request.method === "GET" && path === "/health") {
-        sendJson(response, 200, { ok: true, version: COLLECTOR_VERSION });
-        return;
+    const resolveBaselineTemplate = async (sessionID) => {
+      const get = context.session?.get;
+      if (!get)
+        return null;
+      let info;
+      try {
+        info = await get.call(context.session, { sessionID });
+      } catch {
+        return null;
       }
-      if (request.method === "GET" && (path === "/summary" || path === "/item")) {
-        if (request.headers.authorization !== `Bearer ${token}`) {
-          sendJson(response, 401, { error: "unauthorized" });
-          return;
-        }
-        const sessionID = url.searchParams.get("sessionID");
-        if (!sessionID) {
-          sendJson(response, 400, { error: "bad_request" });
-          return;
-        }
-        const itemId = path === "/item" ? url.searchParams.get("itemId") : null;
-        if (path === "/item" && !itemId) {
-          sendJson(response, 400, { error: "bad_request" });
-          return;
-        }
-        const record = store.get(sessionID);
-        if (!record) {
-          sendJson(response, 404, { error: "not_found" });
-          return;
-        }
-        if (path === "/summary") {
-          sendJson(response, 200, record.summary);
-          return;
-        }
-        const item = record.draft.items.find((candidate) => candidate.id === itemId);
-        if (!item) {
-          sendJson(response, 404, { error: "not_found" });
-          return;
-        }
-        const detail = {
-          id: item.id,
-          title: item.title,
-          chars: item.chars,
-          text: item.text
-        };
-        sendJson(response, 200, detail);
-        return;
+      const agent = typeof info?.agent === "string" ? info.agent : "";
+      const ref = info?.model;
+      if (!agent || !ref || typeof ref.providerID !== "string" || typeof ref.modelID !== "string") {
+        return null;
       }
-      sendJson(response, 404, { error: "not_found" });
+      return baselines.get(agent, ref) ?? null;
+    };
+    const server = createServer(async (request, response) => {
+      try {
+        const url = new URL(request.url ?? "/", "http://127.0.0.1");
+        const path = url.pathname;
+        if (request.method === "GET" && path === "/health") {
+          sendJson(response, 200, { ok: true, version: COLLECTOR_VERSION });
+          return;
+        }
+        if (request.method === "GET" && (path === "/summary" || path === "/item")) {
+          if (request.headers.authorization !== `Bearer ${token}`) {
+            sendJson(response, 401, { error: "unauthorized" });
+            return;
+          }
+          const sessionID = url.searchParams.get("sessionID");
+          if (!sessionID) {
+            sendJson(response, 400, { error: "bad_request" });
+            return;
+          }
+          const itemId = path === "/item" ? url.searchParams.get("itemId") : null;
+          if (path === "/item" && !itemId) {
+            sendJson(response, 400, { error: "bad_request" });
+            return;
+          }
+          const record = store.get(sessionID);
+          if (path === "/summary") {
+            if (record) {
+              sendJson(response, 200, record.summary);
+              return;
+            }
+            const template = await resolveBaselineTemplate(sessionID);
+            if (!template) {
+              sendJson(response, 404, { error: "not_found" });
+              return;
+            }
+            const resolved = await windows.resolve(template.modelRef).catch(() => ({ window: DEFAULT_WINDOW, assumed: true }));
+            sendJson(response, 200, baselineSummary(template, sessionID, resolved.window, resolved.assumed));
+            return;
+          }
+          const items = record ? record.draft.items : (await resolveBaselineTemplate(sessionID))?.items;
+          const item = items?.find((candidate) => candidate.id === itemId);
+          if (!item) {
+            sendJson(response, 404, { error: "not_found" });
+            return;
+          }
+          const detail = {
+            id: item.id,
+            title: item.title,
+            chars: item.chars,
+            text: item.text
+          };
+          sendJson(response, 200, detail);
+          return;
+        }
+        sendJson(response, 404, { error: "not_found" });
+      } catch {
+        if (!response.headersSent) {
+          sendJson(response, 500, { error: "internal" });
+        } else {
+          response.end();
+        }
+      }
     });
     let port;
     try {

@@ -1,62 +1,74 @@
 # Context Map
 
-Context Map 是 OpenChamber 的 rail 面板，用来查看当前 session 最后一次请求把上下文花在了哪里。它由两部分组成：
+Context Map is an OpenChamber rail panel that shows where the current session's last model request spent its context. It has two parts:
 
-- **OpenChamber 扩展**：提供面板与 host 侧 Service。
-- **OpenCode Collector**：OpenCode 进程内插件，在请求发往 provider 前记录组装后的 system、tools 与 messages。
+- **OpenChamber extension**: the panel and a host-side Service.
+- **OpenCode Collector**: an in-process OpenCode plugin that records the assembled system prompt, tools, and messages just before a request goes to the provider.
 
-面板只保留每个 session 的最后一次请求，数据在内存里，不落盘；OpenCode 重启后历史清空。token 由字符数估算，最近一次 assistant 的 `input + cache.read + cache.write` 作为总用量校准，详情见 `docs/adr/0003-token-accounting.md`。
+The panel keeps only the last request per session. Snapshots live in memory and are never written to disk; restarting OpenCode clears them. Tokens are estimated from character counts and calibrated against the most recent assistant's `input + cache.read + cache.write`. See `docs/adr/0003-token-accounting.md`.
 
-## 环境要求
+## Requirements
 
-- macOS 或 Linux（当前只在 macOS 上验证过；Windows 未验证）。
-- [Bun](https://bun.sh/) 1.3 或更高版本。
-- OpenChamber 2.5.2（当前验证版本）。
-- OpenCode 2.2.2（当前验证版本），需要 V2 插件接口。
-- 仓库放在稳定路径。扩展以软链方式安装，安装后不要移动或删除仓库目录。
+- macOS or Linux (only macOS has been verified; Windows is untested).
+- [Bun](https://bun.sh/) 1.3 or newer.
+- OpenChamber 2.5.2 (verified version).
+- OpenCode 2.2.2 (verified version) with the V2 plugin API.
+- A stable repository path. The extension is installed as a symlink, so do not move or delete the checkout afterwards.
 
-## 安装
+## Install
 
 ```bash
-git clone <本仓库地址> openchamber-context-map
+git clone <repository-url> openchamber-context-map
 cd openchamber-context-map
 bun run install
 ```
 
-只需要 Bun；安装脚本不依赖 `node_modules`，也不需要在安装时构建。脚本会依次做三件事：
+Only Bun is required. The installer needs no `node_modules` and does not build anything. It performs three steps:
 
-1. 创建软链 `~/.config/openchamber/extensions/context-map`，指向仓库根目录。
-2. 把 `collector/main.js` 复制为 `~/.config/opencode/plugins/context-map.js`，并在文件开头写入版本标记。
-3. 把扩展路径登记到 `~/.config/openchamber/extensions.json`；登记时确保 `service` 权限已授予（当前 manifest 没有额外 exec/socket 权限）。
+1. Creates the symlink `~/.config/openchamber/extensions/context-map` pointing at the repository root.
+2. Copies `collector/main.js` to `~/.config/opencode/plugins/context-map.js` with a version marker on the first line.
+3. Registers the extension path in `~/.config/openchamber/extensions.json` and grants the `service` capability.
 
-安装完成后，**完全退出** OpenCode 和 OpenChamber，再重新打开：
+After installing, **fully quit** OpenCode and OpenChamber, then reopen them:
 
-- OpenCode 要完全退出，不能只关窗口；Collector 只在进程启动时加载。
-- OpenChamber 重新打开后，在rail 里打开 **Context Map**。
-- 面板状态应显示 `Collector 已连接 · v0.1.0`。如果显示 `Collector 未运行`，先确认 OpenCode 确实已经重启。
+- OpenCode must exit completely; closing the window is not enough. The Collector only loads at process start.
+- Open the **Context Map** panel from the rail in OpenChamber.
+- The status dot next to the title is green and shows `v0.1.0`; hovering it reads `Collector connected · v0.1.0`. If it says `Collector is not running`, confirm OpenCode was actually restarted.
 
-默认路径如下：
+Default paths:
 
-| 内容 | 路径 |
+| Item | Path |
 | --- | --- |
-| 扩展软链 | `~/.config/openchamber/extensions/context-map` → 仓库根目录 |
+| Extension symlink | `~/.config/openchamber/extensions/context-map` → repository root |
 | Collector | `~/.config/opencode/plugins/context-map.js` |
-| 扩展清单 | `~/.config/openchamber/extensions.json` |
+| Extension registry | `~/.config/openchamber/extensions.json` |
 
-如果使用非默认目录，可以用环境变量覆盖：
+Override non-default directories with environment variables:
 
 ```bash
 OPENCHAMBER_DATA_DIR=/path/to/openchamber bun run install
 XDG_CONFIG_HOME=/path/to/config bun run install
 ```
 
-安装脚本是幂等的：重复执行不会产生第二条软链、第二个 Collector 文件或重复的清单条目。它只接受空目标、指向本仓库的软链，或带 `@context-map-collector` 标记的 Collector 文件。目标已存在且不属于本工具时，脚本会停止并保留原文件，不会覆盖用户内容。
+The installer is idempotent: running it again does not create a second symlink, a second Collector file, or duplicate registry entries. It only accepts an empty target, a symlink pointing at this repository, or a Collector file carrying the `@context-map-collector` marker. If a target already exists and was not created by this tool, the installer stops and leaves the file untouched.
 
-安装或卸载前建议先完全退出 OpenChamber，避免运行中的宿主同时改写 `extensions.json`；改动本来也需要重启后才生效。
+Quit OpenChamber before installing or uninstalling so a running host does not rewrite `extensions.json` at the same time; the change requires a restart anyway.
 
-## 升级
+## Use
 
-扩展目录是软链，更新仓库文件后 OpenChamber 重新加载即可；Collector 是复制到 OpenCode 插件目录的副本，必须重新运行安装命令才会更新。因此升级统一按下面做：
+The panel has three parts:
+
+- **Context usage**: model name, `used / window`, percentage, and badges for estimated numbers, an assumed window, or a baseline snapshot. The status dot and version sit next to the title, and a small refresh button reloads the snapshot.
+- **Context map**: 200 cells, each representing 1/200 of the denominator. Used cells are colored by category; the remaining cells are outlined to show free space. Press `Z` or click the Zoom label to switch between `Window` and `Fit`. Fit sets the denominator to `min(window, ceil2sig(used × 1.15))`, with a 10k floor.
+- **Breakdown**: one row per non-empty category plus Free space. Click a row to list its items; click an item to read its preview. `Esc` goes back one level, `↑`/`↓` or `j`/`k` moves, and `Enter` opens the focused row.
+
+Before a session's first request, the panel shows a **baseline** built from the most recent real request for the same agent and model: system prompt and tool definitions only. It is marked `baseline` and `estimated`, and the first real request replaces it. If no such request exists yet, the panel waits for the first request instead.
+
+The panel follows OpenChamber's language. English is the source language; Chinese is translated; any other locale falls back to English.
+
+## Upgrade
+
+The extension directory is a symlink, so OpenChamber picks up repository changes on reload. The Collector is a copy in the OpenCode plugin directory and only updates when the installer runs again. Upgrade both together:
 
 ```bash
 cd openchamber-context-map
@@ -64,112 +76,110 @@ git pull
 bun run install
 ```
 
-然后完全退出并重新打开 OpenCode 与 OpenChamber。安装输出中出现 `已更新：...（旧版本 -> 新版本）` 或 `构建产物已更新` 都表示 Collector 已替换。
+Then fully quit and reopen OpenCode and OpenChamber. Installer output such as `Updated: ... (old -> new)` or `Build artifacts updated` means the Collector was replaced.
 
-### 面板提示「collector 版本过旧」
+### The panel says the Collector is outdated
 
-这条提示表示正在运行的 Collector 版本与扩展期望的版本不一致。它只提示，不会自动更新（见 `docs/adr/0008-degradation-layers.md`）。
+The running Collector version does not match the version the extension expects. The panel only warns; it never updates the Collector automatically (see `docs/adr/0008-degradation-layers.md`).
 
-处理步骤：
+1. Run `bun run install` in the repository and confirm the Collector was updated to the expected version.
+2. Fully quit **every** OpenCode instance, then reopen. Closing one window or restarting one instance can leave an old process registered.
+3. The status should return to `Collector connected · vX.Y.Z`, and the warning should disappear.
 
-1. 在仓库里执行 `bun run install`，确认输出显示 Collector 已更新到扩展期望的版本。
-2. 完全退出**所有** OpenCode 实例，再重新打开。只关窗口或只重启其中一个实例，旧进程仍可能注册着旧版本。
-3. 打开面板，状态应恢复为 `Collector 已连接 · vX.Y.Z`，黄色版本提示消失。
-
-如果仍然提示过旧，检查：
+If the warning persists, check:
 
 ```bash
 head -1 ~/.config/opencode/plugins/context-map.js
 ```
 
-第一行应该是 `// @context-map-collector v<版本>`。如果版本已经是新的，但面板仍旧，通常是还有旧 OpenCode 进程在运行；退出所有实例后重试。也可以用 `pgrep -fl opencode` 检查残留进程。
+The first line should be `// @context-map-collector v<version>`. If the file is current but the panel still warns, an old OpenCode process is usually still running; quit all instances and retry. `pgrep -fl opencode` lists leftovers.
 
-## 卸载
+## Uninstall
 
 ```bash
 cd openchamber-context-map
 bun run uninstall
 ```
 
-卸载只会删除：
+Uninstall removes only:
 
-- 指向本仓库的 `~/.config/openchamber/extensions/context-map` 软链；
-- 带 `@context-map-collector` 标记的 `~/.config/opencode/plugins/context-map.js`；
-- `extensions.json` 里对应的路径，以及没有其它同 guest 安装时留下的授权和存储 id。
+- the `~/.config/openchamber/extensions/context-map` symlink pointing at this repository;
+- `~/.config/opencode/plugins/context-map.js` when it carries the `@context-map-collector` marker;
+- the matching path in `extensions.json`, plus grants and storage ids left behind when no other installation of the same guest remains.
 
-其它扩展、用户自己的插件和清单字段都会保留。卸载后同样需要完全退出并重新打开 OpenCode 与 OpenChamber。若目标不是本工具创建的，脚本会保留它并以非零状态退出，请先确认再手工处理。
+Other extensions, your own plugins, and unknown registry fields are preserved. Restart OpenCode and OpenChamber afterwards. If a target was not created by this tool, the script keeps it and exits non-zero; inspect it before removing anything by hand.
 
-## 常见故障
+## Troubleshooting
 
-### Collector 未运行
+### Collector is not running
 
-面板显示 `Collector 未运行`，详情是「没有找到 Discovery file」。
+The panel shows `Collector is not running` and mentions a missing discovery file.
 
-1. 确认文件存在：
+1. Confirm the plugin file exists:
 
    ```bash
    ls -l ~/.config/opencode/plugins/context-map.js
    ```
 
-2. 确认 OpenCode 正在运行，并且 discovery 目录里有当前进程的文件：
+2. Confirm OpenCode is running and the discovery directory has a file for the current process:
 
    ```bash
    ls -l ~/.local/state/openchamber-context-map/collectors/
    ```
 
-   正常情况下会看到 `collector-<pid>.json`。如果设置了 `CONTEXT_MAP_DISCOVERY_DIR`，以该目录为准。
+   You should see `collector-<pid>.json`. If `CONTEXT_MAP_DISCOVERY_DIR` is set, look there instead.
 
-3. 文件不存在时，重新执行 `bun run install`，然后完全退出并重开 OpenCode。OpenCode 版本过低、插件加载报错，或只关闭了窗口而没有退出进程，都会导致 Collector 没有加载。
+3. If the file is missing, run `bun run install` again, then fully quit and reopen OpenCode. An old OpenCode version, a plugin load error, or closing only the window can all prevent the Collector from loading.
 
-`opencode plugin list` 只列出通过包安装的插件，不会列出 `~/.config/opencode/plugins/` 里的本地文件插件；这里显示 `No plugins found` 不代表 Collector 没装。
+`opencode plugin list` only lists plugins installed as packages, not local files in `~/.config/opencode/plugins/`; `No plugins found` there does not mean the Collector is missing.
 
-如果 discovery 文件存在但面板显示 `Collector 没有响应`，通常是旧进程留下的 stale discovery。退出 OpenCode 后删除该目录下的 `collector-*.json`，再重新打开 OpenCode。
+If the discovery file exists but the panel says `Collector is not responding`, a stale discovery file from an old process is the usual cause. Quit OpenCode, delete `collector-*.json` in that directory, and reopen OpenCode.
 
-### Service 未就绪
+### Service is not ready
 
-面板显示 `Service 未就绪`，或 host 返回 `NO_SERVICE` / `NOT_GRANTED`。
+The panel shows `Service is not ready`, or the host returns `NO_SERVICE` / `NOT_GRANTED`.
 
-1. 打开 OpenChamber 的 **Settings → Extensions**，确认 Context Map 已启用，并且 Service 权限已授权。
-2. 重新执行 `bun run install`，它会补登记并授予 `service`（如果清单里还没有）。
-3. 完全退出并重开 OpenChamber。
+1. Open **Settings → Extensions** in OpenChamber and confirm Context Map is enabled with the Service capability granted.
+2. Run `bun run install` again; it registers the extension and grants `service` if the registry entry is missing it.
+3. Fully quit and reopen OpenChamber.
 
-如果显示 `Service 已停止`（`SERVICE_FAILED`），先重启 OpenChamber；仍然失败时检查是否同时开了多个 OpenChamber 实例，或查看 OpenChamber 日志里的 Service 启动错误。
+If the panel shows `Service stopped` (`SERVICE_FAILED`), restart OpenChamber first. If it still fails, check for multiple OpenChamber instances or look for Service startup errors in the OpenChamber log.
 
-### 没有请求记录
+### No snapshot yet
 
-面板显示 `还没有请求记录`，但状态是 `Collector 已连接`，说明 Collector 正常，只是当前 session 还没有被记录：
+The status is connected, but the panel waits for the first request. The current session has no recorded request yet:
 
-- 在当前 session 发一条消息，等请求完成后面板会出现快照。
-- 面板只保留最后一次请求；切换 session 后，每个 session 各自显示自己的最后一次。
-- OpenCode 重启后内存清空，新 session 在第一次请求前也是空的。
-- 空闲时面板停止轮询；如果刚发完请求没有更新，点面板右上角的「刷新」。
+- Send a message in the session; the snapshot appears after the request completes.
+- Only the last request is kept; switching sessions shows each session's own last request.
+- Restarting OpenCode clears memory, so a new session is empty until its first request.
+- The panel stops polling while idle. If a request just finished and nothing changed, click refresh in the usage card.
 
-### 端口冲突
+### Port conflicts
 
-Service 的端口由 OpenChamber 通过 `OPENCHAMBER_SERVICE_PORT` 分配，Collector 使用随机 loopback 端口，都不需要手工配置。
+OpenChamber assigns the Service port through `OPENCHAMBER_SERVICE_PORT`; the Collector uses a random loopback port. Neither needs manual configuration.
 
-- 如果 OpenChamber 日志出现 `EADDRINUSE`，通常是重复启动了 OpenChamber，或端口被其它进程占用。完全退出所有 OpenChamber 实例后只开一个。
-- Collector 的随机端口冲突很少见；如果 discovery 里的端口被别的进程占用，Service 会探活失败并尝试下一个 Collector。退出 OpenCode 后清理 stale discovery，再重开即可。
-- 同时运行多个 OpenCode 实例时，Service 会按 `startedAt` 从新到旧询问，返回第一个有效快照（见 `docs/adr/0009-collector-routing.md`）。如果看到的是另一个实例的数据，先关掉不用的实例。
+- `EADDRINUSE` in the OpenChamber log usually means a duplicate OpenChamber instance or a port taken by another process. Quit all instances and start one.
+- Collector port conflicts are rare. If the port in a discovery file is taken, the Service fails its probe and tries the next Collector. Quit OpenCode, clean stale discovery files, and reopen.
+- With several OpenCode instances, the Service asks them from newest to oldest `startedAt` and returns the first valid snapshot (see `docs/adr/0009-collector-routing.md`). If the panel shows another instance's data, close the unused instance.
 
-### 面板不在 rail 里
+### The panel is missing from the rail
 
-1. 打开 **Settings → Extensions**，确认 Context Map 没有被禁用。
-2. 检查 `~/.config/openchamber/extensions.json` 的 `paths` 是否包含 `.../extensions/context-map`；没有就重新运行 `bun run install`。
-3. 完全退出并重开 OpenChamber。安装或修改清单后，运行中的 OpenChamber 不会立即感知外部改动。
+1. Open **Settings → Extensions** and confirm Context Map is not disabled.
+2. Check that `paths` in `~/.config/openchamber/extensions.json` contains `.../extensions/context-map`; rerun `bun run install` if it does not.
+3. Fully quit and reopen OpenChamber. A running host does not notice external registry changes.
 
-### 安装被拒绝
+### The installer refuses to continue
 
-脚本提示「扩展目标已存在」或「Collector 目标已存在」时，它没有覆盖任何文件。先确认目标是什么：
+When it reports that the extension or Collector target already exists, it has not overwritten anything. Inspect the target:
 
 ```bash
 ls -ld ~/.config/openchamber/extensions/context-map
 ls -l ~/.config/opencode/plugins/context-map.js
 ```
 
-如果确认是旧的用户文件，先备份并移走，再运行 `bun run install`。不要直接删除不确定来源的目录。
+If it is an old file of yours, back it up and move it away, then run `bun run install` again. Do not delete a directory whose origin you are unsure of.
 
-## 开发
+## Development
 
 ```bash
 bun install
@@ -177,53 +187,57 @@ bun run build
 bun run dev
 ```
 
-终端会打印预览地址，例如 `http://127.0.0.1:xxxxx`。`bun run dev` 启动时是空面板，在页面上点「模拟请求」才会注入快照。
+The terminal prints a preview URL such as `http://127.0.0.1:xxxxx`. `bun run dev` starts with an empty panel; click **Simulate request** in the page to inject a snapshot.
 
-`bun install` 会把 `package.json` 里的 `install` 脚本当作生命周期执行；安装脚本会识别这种调用并跳过，不会误装扩展。安装扩展仍然要用 `bun run install`。
+`bun install` runs the `install` script from `package.json` as a lifecycle step; the installer detects that invocation and skips installing the extension. Use `bun run install` for the extension itself.
 
-如果不想手动点，使用固定快照模式：
+To skip the manual click, start with a fixed snapshot:
 
 ```bash
 bun run dev:fixture
 ```
 
-它会在启动时自动注入 `DEV_FIXTURE`，打开终端打印的地址就能看到完整面板，不需要真实 OpenCode 请求。开发链路会启动一个进程内 Collector、一个 Service 子进程和假 host，discovery 使用临时目录，退出时自动清理；不需要安装 OpenChamber 扩展。
+It injects `DEV_FIXTURE` at startup, so the full panel appears without a real OpenCode request. The dev harness starts an in-process Collector, a Service child process, and a fake host; discovery uses a temporary directory and is cleaned up on exit. No installed extension is needed.
 
-预览页顶部的 devbar 可以切换 Session A/B、busy/idle、lifecycle，也可以模拟 Service 停止、Collector 停止、`NO_SERVICE`、`NOT_GRANTED`、`DISABLED`、Collector 卡住和版本过旧等降级状态，便于对照 `docs/adr/0008-degradation-layers.md` 与 `docs/adr/0009-collector-routing.md` 走查。
+The dev bar switches Session A/B, busy/idle, lifecycle events, and simulated Service or Collector failures (`NO_SERVICE`, `NOT_GRANTED`, `DISABLED`, a stuck Collector, an outdated Collector). Add `?locale=en` or `?locale=zh` to preview either language and `?theme=dark` for the dark palette.
 
-提交前运行：
+Before committing:
 
 ```bash
 bun test
 bun run typecheck
 ```
 
-### 构建产物为什么提交
+### Why build artifacts are committed
 
-`panel/main.js`、`service/main.js`、`collector/main.js` 是提交进仓库的构建产物。OpenChamber 安装扩展时只读取 `package.json` 的 manifest 和入口文件，不执行构建；如果产物不在仓库里，`bun run install` 装出来的扩展就无法加载。因此修改 `src/` 后必须运行：
+`panel/main.js`, `service/main.js`, and `collector/main.js` are committed build outputs. OpenChamber reads the manifest and entry files without running a build, so an extension installed without them would not load. After changing `src/`, run:
 
 ```bash
 bun run build
 ```
 
-并把三个产物一起提交。不要手工编辑生成文件；构建脚本见 `scripts/build.ts`，理由见 `docs/adr/0004-build-artifacts-committed.md`。
+and commit all three outputs. Do not edit generated files by hand; the build script is `scripts/build.ts`, and the rationale is in `docs/adr/0004-build-artifacts-committed.md`.
 
-## 目录
+## Layout
 
 ```text
 src/collector/   OpenCode Collector
 src/service/     OpenChamber host Service
-src/panel/       面板
-src/shared/      协议、discovery、版本
-scripts/         install、dev、build
-panel/           panel 构建产物
-service/         service 构建产物
-collector/       collector 构建产物
-docs/adr/        架构决策记录
+src/panel/       Panel
+src/shared/      Protocol, discovery, version
+scripts/         install, dev, build
+panel/           Panel build output
+service/         Service build output
+collector/       Collector build output
+docs/adr/        Architecture decision records (Chinese)
 ```
 
-## 隐私
+## Privacy
 
-- 快照只存在内存里，每个 session 只保留最后一次请求，最多 20 个 session。
-- 单条预览最多 8000 字符，只在内存中截取。
-- discovery 文件权限为 0600，目录为 0700；bearer token 只在 Collector 与 Service 之间使用，不会进入面板。
+- Snapshots stay in memory; each session keeps only its last request, up to 20 sessions.
+- A preview is truncated to 8000 characters, in memory only.
+- Discovery files are mode 0600 and their directory is 0700. The bearer token is used only between the Collector and the Service and never reaches the panel.
+
+## License
+
+MIT. See `LICENSE`.

@@ -11,12 +11,19 @@ import {
 } from "../shared/types.ts";
 import { COLLECTOR_VERSION } from "../shared/version.ts";
 import { describeHostFailure, type HostFailureCopy } from "./failure.ts";
-import { CATEGORY_LABELS } from "./labels.ts";
+import {
+  CATEGORY_LABEL_KEYS,
+  resolveLocale,
+  t,
+  type Locale,
+  type MessageKey,
+} from "./i18n.ts";
 import {
   COMPACT_COLUMNS,
   MAP_COLUMNS,
   buildBreakdown,
   categoryOfItem,
+  fitDenominator,
   gradientStops,
   itemsForCategory,
   layoutMap,
@@ -51,26 +58,27 @@ import {
 const STYLE = `
   html, body { margin: 0; background: transparent; color: var(--oc-fg); font: 12px/1.4 var(--oc-font); }
   * { box-sizing: border-box; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   html, body { height: 100%; overflow-y: auto; overflow-x: hidden; }
   #root { display: flex; flex-direction: column; gap: 14px; padding: 12px 12px 20px; }
-  .head { display: flex; flex-direction: column; gap: 2px; }
-  .head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .head-actions { flex: none; display: flex; align-items: center; gap: 6px; }
-  .title { font-size: 13px; font-weight: 600; }
-  .subtitle { color: var(--oc-muted); font-size: 11px; }
-  .updated { color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .updated { color: var(--oc-muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
   .usage, .card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--oc-radius);
     background: color-mix(in srgb, var(--oc-fg) 4%, transparent); }
   .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-height: 18px; }
   .card-title { flex: none; font-weight: 600; }
-  .map-hint { min-width: 0; max-width: 58%; color: var(--oc-muted); font-size: 11px; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
+  .zoom { appearance: none; -webkit-appearance: none; flex: none; padding: 2px 7px;
+    border: 1px solid var(--oc-border); border-radius: 5px; background: transparent;
+    color: var(--oc-muted); font: inherit; font-size: 10px; cursor: pointer; }
+  .zoom:hover { color: var(--oc-fg); background: color-mix(in srgb, var(--oc-fg) 7%, transparent); }
+  .zoom:focus-visible { outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: -2px; }
   .map-wrap { position: relative; }
   .map { display: grid; grid-template-columns: repeat(${MAP_COLUMNS}, minmax(0, 1fr)); gap: 2px; }
   .cell { appearance: none; -webkit-appearance: none; display: block; width: 100%; min-width: 0;
     aspect-ratio: 1; padding: 0; border: 0; border-radius: 2px; background: var(--oc-border);
     cursor: pointer; transition: opacity .12s ease; }
   .cell:hover { outline: 1px solid var(--oc-fg); outline-offset: 1px; }
+  .cell.free { background: transparent; box-shadow: inset 0 0 0 1px var(--oc-border); }
   .cell.is-active { outline: 2px solid var(--oc-fg); outline-offset: 1px; }
   .cell.is-dim { opacity: .32; }
   .map-tip { position: absolute; z-index: 3; left: 0; top: 0; max-width: 100%; padding: 6px 8px;
@@ -81,15 +89,11 @@ const STYLE = `
   .tip-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
   .tip-row + .tip-row { margin-top: 2px; }
   .tip-tokens { margin-left: auto; color: var(--oc-muted); font-variant-numeric: tabular-nums; }
-  .map-empty { padding: 12px 4px; color: var(--oc-muted); font-size: 11px; }
-  .window-track { height: 5px; border-radius: 3px; overflow: hidden;
-    background: color-mix(in srgb, var(--oc-fg) 12%, transparent); }
-  .window-used { height: 100%; width: 0; border-radius: 3px; background: var(--oc-primary);
-    transition: width .2s ease; }
-  .window-used[data-over="true"] { background: var(--oc-error); }
-  .window-caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px;
+  .map-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
     color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-  .window-caption .is-over { color: var(--oc-fg); font-weight: 600; }
+  .legend-item { display: inline-flex; align-items: center; gap: 5px; }
+  .legend-swatch { width: 8px; height: 8px; border-radius: 2px; background: var(--oc-primary); }
+  .legend-swatch.free { background: transparent; box-shadow: inset 0 0 0 1px var(--oc-border); }
   .breakdown-list { display: flex; flex-direction: column; gap: 1px; }
   .row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 8px;
     width: 100%; padding: 6px; border: 0; border-radius: 6px; background: transparent; color: inherit;
@@ -100,6 +104,7 @@ const STYLE = `
     outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: -2px; }
   .row-free { cursor: default; }
   .swatch { width: 8px; height: 8px; border-radius: 2px; }
+  .swatch.free { background: transparent; box-shadow: inset 0 0 0 1px var(--oc-border); }
   .row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-meta { color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums;
     white-space: nowrap; }
@@ -151,22 +156,22 @@ const STYLE = `
   }
   .usage-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .usage-title { font-weight: 600; }
-  .usage-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+  .usage-actions { display: flex; align-items: center; gap: 6px; }
+  .usage-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+  .status-inline { display: inline-flex; align-items: center; gap: 4px; color: var(--oc-muted);
+    font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  .status-inline .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--oc-muted); }
+  .status-inline[data-state="connected"] .dot { background: var(--oc-success); }
+  .status-inline[data-state="disconnected"] .dot { background: var(--oc-warning, #d97706); }
+  .status-inline[data-state="failed"] .dot { background: var(--oc-error); }
+  .refresh-slot { display: inline-flex; }
+  .refresh-slot .oc-sdk-btn { min-width: 24px; padding: 2px 6px; }
   .usage-model { color: var(--oc-muted); font-family: var(--oc-mono); font-size: 11px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .usage-meter { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .usage-numbers { font-variant-numeric: tabular-nums; }
   .usage-window { color: var(--oc-muted); }
   .usage-pct { font-weight: 600; font-variant-numeric: tabular-nums; }
-  .status { display: flex; align-items: flex-start; gap: 8px; padding: 12px; border-radius: var(--oc-radius);
-    background: color-mix(in srgb, var(--oc-fg) 4%, transparent); }
-  .dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--oc-muted); }
-  .status[data-state="connected"] .dot { background: var(--oc-success); }
-  .status[data-state="disconnected"] .dot { background: var(--oc-warning, #d97706); }
-  .status[data-state="failed"] .dot { background: var(--oc-error); }
-  .status-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .status-title { font-weight: 600; }
-  .status-detail { color: var(--oc-muted); font-size: 11px; }
   .placeholder { display: flex; flex-direction: column; gap: 4px; padding: 18px 12px;
     border-radius: var(--oc-radius); background: color-mix(in srgb, var(--oc-fg) 3%, transparent); }
   .placeholder-title { font-weight: 600; }
@@ -181,7 +186,7 @@ type PanelState =
   | { kind: "checking" }
   | { kind: "connected"; version: string; outdated?: boolean; expectedVersion?: string }
   | { kind: "disconnected"; reason: "not_found" | "unreachable" }
-  | { kind: "failed"; title: string; detail: string };
+  | { kind: "failed"; titleKey: MessageKey; detailKey: MessageKey };
 
 interface HealthBody {
   collector?: {
@@ -197,73 +202,88 @@ const host = connectHost();
 const root = document.querySelector<HTMLElement>("#root");
 if (!root) throw new Error("Missing #root");
 
+let currentLocale: Locale = "en";
+
 const style = document.createElement("style");
 style.textContent = STYLE;
 const palette = document.createElement("style");
 palette.textContent = paletteCss();
 document.head.append(style, palette);
 
-const head = document.createElement("div");
-head.className = "head";
-const headRow = document.createElement("div");
-headRow.className = "head-row";
-const title = document.createElement("div");
-title.className = "title";
-title.textContent = "Context Map";
-const headActions = document.createElement("div");
-headActions.className = "head-actions";
-const refreshButton = mountButton(headActions, {
-  label: "刷新",
-  variant: "outline",
-  size: "xs",
-  onClick: () => manualRefresh(),
-});
-const subtitle = document.createElement("div");
-subtitle.className = "subtitle";
-subtitle.textContent = "最后一次请求的上下文构成";
-const updated = document.createElement("div");
-updated.className = "updated";
-updated.hidden = true;
-headRow.append(title, headActions);
-head.append(headRow, subtitle, updated);
-
 const bannerSlot = document.createElement("div");
 bannerSlot.hidden = true;
 const banner = mountBanner(bannerSlot, {
   tone: "warning",
-  title: "刷新失败",
+  title: t(currentLocale, "refreshFailedTitle"),
   body: "",
-  action: { label: "重试", onClick: () => manualRefresh() },
+  action: { label: t(currentLocale, "retry"), onClick: () => manualRefresh() },
 });
 
 const versionSlot = document.createElement("div");
 versionSlot.hidden = true;
 const versionBanner = mountBanner(versionSlot, {
   tone: "warning",
-  title: "collector 版本过旧",
+  title: t(currentLocale, "versionOutdatedTitle"),
   body: "",
 });
 
 const usage = document.createElement("section");
 usage.className = "usage";
-usage.hidden = true;
 const usageHead = document.createElement("div");
 usageHead.className = "usage-head";
 const usageTitle = document.createElement("div");
 usageTitle.className = "usage-title";
-usageTitle.textContent = "Context usage";
+usageTitle.textContent = t(currentLocale, "usageTitle");
+const usageActions = document.createElement("div");
+usageActions.className = "usage-actions";
+const statusInline = document.createElement("span");
+statusInline.className = "status-inline";
+statusInline.dataset.state = "checking";
+statusInline.setAttribute("role", "status");
+statusInline.setAttribute("aria-live", "polite");
+const dot = document.createElement("span");
+dot.className = "dot";
+dot.setAttribute("aria-hidden", "true");
+const statusVersion = document.createElement("span");
+statusVersion.className = "status-version";
+statusInline.append(dot, statusVersion);
+const refreshSlot = document.createElement("span");
+refreshSlot.className = "refresh-slot";
+const refreshButton = mountButton(refreshSlot, {
+  label: "↻",
+  variant: "ghost",
+  size: "xs",
+  onClick: () => manualRefresh(),
+});
+const refreshNode = refreshSlot.querySelector<HTMLButtonElement>("button");
+refreshNode?.setAttribute("aria-label", t(currentLocale, "refresh"));
+refreshNode?.setAttribute("title", t(currentLocale, "refresh"));
 const usageBadges = document.createElement("div");
 usageBadges.className = "usage-badges";
 const estimatedSlot = document.createElement("span");
 estimatedSlot.hidden = true;
-estimatedSlot.title = "部分数字由字符估算，provider 未提供完整 token 用量。";
-mountBadge(estimatedSlot, { label: "estimated", tone: "warning" });
+estimatedSlot.title = t(currentLocale, "estimatedTitle");
+const estimatedBadge = mountBadge(estimatedSlot, {
+  label: t(currentLocale, "estimatedBadge"),
+  tone: "warning",
+});
 const assumedSlot = document.createElement("span");
 assumedSlot.hidden = true;
-assumedSlot.title = "没有取得模型窗口，按 200,000 tokens 估算。";
-mountBadge(assumedSlot, { label: "assumed window", tone: "info" });
-usageBadges.append(estimatedSlot, assumedSlot);
-usageHead.append(usageTitle, usageBadges);
+assumedSlot.title = t(currentLocale, "assumedWindowTitle");
+const assumedBadge = mountBadge(assumedSlot, {
+  label: t(currentLocale, "assumedWindowBadge"),
+  tone: "info",
+});
+const baselineSlot = document.createElement("span");
+baselineSlot.hidden = true;
+baselineSlot.title = t(currentLocale, "baselineTitle");
+const baselineBadge = mountBadge(baselineSlot, {
+  label: t(currentLocale, "baselineBadge"),
+  tone: "info",
+});
+usageBadges.append(estimatedSlot, assumedSlot, baselineSlot);
+usageActions.append(statusInline, refreshSlot);
+usageHead.append(usageTitle, usageActions);
 
 const usageModel = document.createElement("div");
 usageModel.className = "usage-model";
@@ -274,15 +294,26 @@ usageNumbers.className = "usage-numbers";
 const usageUsed = document.createElement("span");
 const usageWindow = document.createElement("span");
 usageWindow.className = "usage-window";
-usageNumbers.append(usageUsed, document.createTextNode(" / "), usageWindow, document.createTextNode(" tokens"));
+usageNumbers.append(
+  usageUsed,
+  document.createTextNode(" / "),
+  usageWindow,
+  document.createTextNode(` ${t(currentLocale, "tokensUnit")}`),
+);
 const usagePct = document.createElement("div");
 usagePct.className = "usage-pct";
 usageMeter.append(usageNumbers, usagePct);
 
 const usageProgress = document.createElement("div");
-const progress = mountProgress(usageProgress, { value: 0, label: "已用" });
+const progress = mountProgress(usageProgress, {
+  value: 0,
+  label: t(currentLocale, "usedLabel"),
+});
+const updated = document.createElement("div");
+updated.className = "updated";
+updated.hidden = true;
 
-usage.append(usageHead, usageModel, usageMeter, usageProgress);
+usage.append(usageHead, usageModel, usageBadges, usageMeter, usageProgress, updated);
 
 const mapCard = document.createElement("section");
 mapCard.className = "card map-card";
@@ -291,45 +322,47 @@ const mapHead = document.createElement("div");
 mapHead.className = "card-head";
 const mapTitle = document.createElement("div");
 mapTitle.className = "card-title";
-mapTitle.textContent = "Context map";
+mapTitle.textContent = t(currentLocale, "mapTitle");
 const mapHint = document.createElement("div");
-mapHint.className = "map-hint";
+mapHint.className = "sr-only";
 mapHint.setAttribute("aria-live", "polite");
-mapHint.textContent = "悬停或点击格子查看分类";
-mapHead.append(mapTitle, mapHint);
+mapHint.textContent = t(currentLocale, "mapHint");
+const zoomButton = document.createElement("button");
+zoomButton.type = "button";
+zoomButton.className = "zoom";
+zoomButton.title = t(currentLocale, "zoomTitle");
+zoomButton.addEventListener("click", () => toggleZoom());
+mapHead.append(mapTitle, zoomButton, mapHint);
 
 const mapWrap = document.createElement("div");
 mapWrap.className = "map-wrap";
 const mapGrid = document.createElement("div");
 mapGrid.className = "map";
 mapGrid.setAttribute("role", "group");
-mapGrid.setAttribute("aria-label", "Context map，按已用 token 绘制");
+mapGrid.setAttribute("aria-label", t(currentLocale, "mapAria"));
 const mapTip = document.createElement("div");
 mapTip.className = "map-tip";
 mapTip.setAttribute("role", "tooltip");
 mapTip.hidden = true;
-const mapEmpty = document.createElement("div");
-mapEmpty.className = "map-empty";
-mapEmpty.textContent = "这次请求还没有可绘制的上下文。";
-mapEmpty.hidden = true;
-mapWrap.append(mapGrid, mapTip, mapEmpty);
+mapWrap.append(mapGrid, mapTip);
 
-const windowTrack = document.createElement("div");
-windowTrack.className = "window-track";
-windowTrack.setAttribute("role", "progressbar");
-windowTrack.setAttribute("aria-label", "Used / Window");
-windowTrack.setAttribute("aria-valuemin", "0");
-windowTrack.setAttribute("aria-valuemax", "100");
-const windowUsedBar = document.createElement("div");
-windowUsedBar.className = "window-used";
-windowTrack.append(windowUsedBar);
-const windowCaption = document.createElement("div");
-windowCaption.className = "window-caption";
-const windowCaptionUsed = document.createElement("span");
-const windowCaptionFree = document.createElement("span");
-windowCaption.append(windowCaptionUsed, windowCaptionFree);
+const mapLegend = document.createElement("div");
+mapLegend.className = "map-legend";
+const freeLegend = document.createElement("span");
+freeLegend.className = "legend-item";
+const freeLegendSwatch = document.createElement("span");
+freeLegendSwatch.className = "legend-swatch free";
+const freeLegendText = document.createElement("span");
+freeLegend.append(freeLegendSwatch, freeLegendText);
+const usedLegend = document.createElement("span");
+usedLegend.className = "legend-item";
+const usedLegendSwatch = document.createElement("span");
+usedLegendSwatch.className = "legend-swatch";
+const usedLegendText = document.createElement("span");
+usedLegend.append(usedLegendSwatch, usedLegendText);
+mapLegend.append(freeLegend, usedLegend);
 
-mapCard.append(mapHead, mapWrap, windowTrack, windowCaption);
+mapCard.append(mapHead, mapWrap, mapLegend);
 
 const breakdownCard = document.createElement("section");
 breakdownCard.className = "card breakdown-card";
@@ -338,11 +371,11 @@ const breakdownHead = document.createElement("div");
 breakdownHead.className = "card-head";
 const breakdownTitle = document.createElement("div");
 breakdownTitle.className = "card-title";
-breakdownTitle.textContent = "Breakdown";
+breakdownTitle.textContent = t(currentLocale, "breakdownTitle");
 const backButton = document.createElement("button");
 backButton.type = "button";
 backButton.className = "back";
-backButton.textContent = "返回";
+backButton.textContent = t(currentLocale, "back");
 backButton.hidden = true;
 backButton.addEventListener("click", () => goBack());
 breakdownHead.append(breakdownTitle, backButton);
@@ -354,7 +387,7 @@ const previewPanel = document.createElement("div");
 previewPanel.className = "preview";
 previewPanel.tabIndex = -1;
 previewPanel.setAttribute("role", "group");
-previewPanel.setAttribute("aria-label", "条目预览");
+previewPanel.setAttribute("aria-label", t(currentLocale, "previewAria"));
 const previewHead = document.createElement("div");
 previewHead.className = "preview-head";
 const previewTitle = document.createElement("div");
@@ -362,8 +395,8 @@ previewTitle.className = "preview-title";
 const previewCopy = document.createElement("button");
 previewCopy.type = "button";
 previewCopy.className = "preview-copy";
-previewCopy.textContent = "复制";
-previewCopy.setAttribute("aria-label", "复制 Preview 正文");
+previewCopy.textContent = t(currentLocale, "previewCopy");
+previewCopy.setAttribute("aria-label", t(currentLocale, "previewCopyAria"));
 previewCopy.addEventListener("click", () => { void copyPreview(); });
 previewHead.append(previewTitle, previewCopy);
 const previewMeta = document.createElement("div");
@@ -375,7 +408,7 @@ previewStatus.setAttribute("aria-live", "polite");
 const previewBody = document.createElement("pre");
 previewBody.className = "preview-body";
 previewBody.tabIndex = 0;
-previewBody.setAttribute("aria-label", "Preview 正文");
+previewBody.setAttribute("aria-label", t(currentLocale, "previewBodyAria"));
 previewPanel.append(previewHead, previewMeta, previewStatus, previewBody);
 
 const placeholder = document.createElement("div");
@@ -388,29 +421,16 @@ const placeholderActions = document.createElement("div");
 placeholderActions.className = "placeholder-actions";
 placeholderActions.hidden = true;
 const placeholderRetry = mountButton(placeholderActions, {
-  label: "重试",
+  label: t(currentLocale, "retry"),
   variant: "outline",
   size: "xs",
   onClick: () => manualRefresh(),
 });
 placeholder.append(placeholderTitle, placeholderDetail, placeholderActions);
 
-const status = document.createElement("div");
-status.className = "status";
-status.dataset.state = "checking";
-const dot = document.createElement("span");
-dot.className = "dot";
-const statusText = document.createElement("div");
-statusText.className = "status-text";
-const statusTitle = document.createElement("div");
-statusTitle.className = "status-title";
-const statusDetail = document.createElement("div");
-statusDetail.className = "status-detail";
-statusText.append(statusTitle, statusDetail);
-status.append(dot, statusText);
+root.append(bannerSlot, versionSlot, usage, mapCard, breakdownCard, placeholder);
 
-root.append(head, bannerSlot, versionSlot, usage, mapCard, breakdownCard, placeholder, status);
-
+let panelState: PanelState = { kind: "checking" };
 let session: SessionSnapshot | null = null;
 let connected = false;
 let booted = false;
@@ -433,7 +453,11 @@ interface CellTarget {
   element: HTMLButtonElement;
 }
 
+type ZoomMode = "window" | "fit";
+
 let selectedCategory: Category | null = null;
+let zoom: ZoomMode = "window";
+let currentFreeTokens = 0;
 let mapSignature: string | null = null;
 let currentLayout: MapLayout | null = null;
 let cellElements = new Map<number, HTMLButtonElement>();
@@ -472,6 +496,23 @@ document.addEventListener("keydown", (event) => {
     hoveredCell = null;
     refreshTooltip();
     if (preview || selectedCategory) goBack();
+    return;
+  }
+
+  const zTarget = event.target;
+  const typing = zTarget instanceof HTMLElement
+    && (zTarget.isContentEditable || zTarget.tagName === "INPUT" || zTarget.tagName === "TEXTAREA"
+      || zTarget.tagName === "SELECT");
+  if (
+    !typing
+    && !event.defaultPrevented
+    && !event.metaKey
+    && !event.ctrlKey
+    && !event.altKey
+    && event.key.toLowerCase() === "z"
+  ) {
+    event.preventDefault();
+    toggleZoom();
     return;
   }
 
@@ -531,38 +572,81 @@ window.addEventListener("resize", () => {
 });
 
 renderStatus({ kind: "checking" });
-showPlaceholder("正在连接 Collector…", "首次打开面板时，本地 Service 可能需要一点时间启动。");
+showPlaceholder(
+  t(currentLocale, "connectingTitle"),
+  t(currentLocale, "connectingDetail"),
+);
 
 function versionLabel(version: string): string {
   return version.startsWith("v") ? version : `v${version}`;
 }
 
 function renderStatus(state: PanelState): void {
-  status.dataset.state = state.kind;
+  panelState = state;
+  statusInline.dataset.state = state.kind;
+  let title: string;
+  let detail: string;
+  let version: string;
   if (state.kind === "checking") {
-    statusTitle.textContent = "正在连接本地 Service…";
-    statusDetail.textContent = "首次打开面板时，Service 可能需要一点时间启动。";
-    return;
-  }
-  if (state.kind === "connected") {
-    statusTitle.textContent = `Collector 已连接 · ${versionLabel(state.version)}`;
-    statusDetail.textContent = state.outdated
-      ? `Collector 版本过旧，扩展期望 ${versionLabel(state.expectedVersion ?? COLLECTOR_VERSION)}。`
-      : "快照会通过本地 Service 读取，bearer 不会进入面板。";
-    return;
-  }
-  if (state.kind === "disconnected") {
+    title = t(currentLocale, "statusCheckingTitle");
+    detail = t(currentLocale, "statusCheckingDetail");
+    version = "…";
+  } else if (state.kind === "connected") {
+    title = t(currentLocale, "statusConnectedTitle", {
+      version: versionLabel(state.version),
+    });
+    detail = state.outdated
+      ? t(currentLocale, "statusOutdatedDetail", {
+        expected: versionLabel(state.expectedVersion ?? COLLECTOR_VERSION),
+      })
+      : t(currentLocale, "statusConnectedDetail");
+    version = versionLabel(state.version);
+  } else if (state.kind === "disconnected") {
     if (state.reason === "unreachable") {
-      statusTitle.textContent = "Collector 没有响应";
-      statusDetail.textContent = "发现文件存在，但 Collector 没有响应。重启 OpenCode 后再试。";
+      title = t(currentLocale, "collectorUnreachableTitle");
+      detail = t(currentLocale, "collectorUnreachableDetail");
     } else {
-      statusTitle.textContent = "Collector 未运行";
-      statusDetail.textContent = `没有找到 Discovery file。把 Collector 安装到 ${COLLECTOR_INSTALL_PATH} 后重启 OpenCode。`;
+      title = t(currentLocale, "collectorNotRunning");
+      detail = t(currentLocale, "collectorNotRunningDetail", {
+        path: COLLECTOR_INSTALL_PATH,
+      });
     }
-    return;
+    version = "—";
+  } else {
+    title = t(currentLocale, state.titleKey);
+    detail = t(currentLocale, state.detailKey);
+    version = "—";
   }
-  statusTitle.textContent = state.title;
-  statusDetail.textContent = state.detail;
+  statusVersion.textContent = version;
+  const full = `${title} · ${detail}`;
+  statusInline.title = full;
+  statusInline.setAttribute("aria-label", full);
+}
+
+function renderStaticCopy(): void {
+  refreshNode?.setAttribute("aria-label", t(currentLocale, "refresh"));
+  refreshNode?.setAttribute("title", t(currentLocale, "refresh"));
+  usageTitle.textContent = t(currentLocale, "usageTitle");
+  estimatedSlot.title = t(currentLocale, "estimatedTitle");
+  estimatedBadge.update({ label: t(currentLocale, "estimatedBadge") });
+  assumedSlot.title = t(currentLocale, "assumedWindowTitle");
+  assumedBadge.update({ label: t(currentLocale, "assumedWindowBadge") });
+  baselineSlot.title = t(currentLocale, "baselineTitle");
+  baselineBadge.update({ label: t(currentLocale, "baselineBadge") });
+  mapTitle.textContent = t(currentLocale, "mapTitle");
+  mapHint.textContent = t(currentLocale, "mapHint");
+  mapGrid.setAttribute("aria-label", t(currentLocale, "mapAria"));
+  zoomButton.title = t(currentLocale, "zoomTitle");
+  breakdownTitle.textContent = t(currentLocale, "breakdownTitle");
+  backButton.textContent = t(currentLocale, "back");
+  previewPanel.setAttribute("aria-label", t(currentLocale, "previewAria"));
+  previewCopy.textContent = t(currentLocale, "previewCopy");
+  previewCopy.setAttribute("aria-label", t(currentLocale, "previewCopyAria"));
+  previewBody.setAttribute("aria-label", t(currentLocale, "previewBodyAria"));
+  renderVersionBanner();
+  renderRefreshBanner();
+  renderStatus(panelState);
+  mapSignature = null;
 }
 
 function failureOf(error: unknown): HostFailureCopy {
@@ -583,13 +667,21 @@ function renderVersionBanner(): void {
   if (collectorOutdated === null) return;
   versionBanner.update({
     tone: "warning",
-    title: "collector 版本过旧",
-    body: `Collector 运行 ${versionLabel(collectorOutdated.version)}，扩展期望 ${versionLabel(collectorOutdated.expectedVersion)}。请手动更新 Collector；不会自动更新。`,
+    title: t(currentLocale, "versionOutdatedTitle"),
+    body: t(currentLocale, "versionOutdatedBody", {
+      version: versionLabel(collectorOutdated.version),
+      expected: versionLabel(collectorOutdated.expectedVersion),
+    }),
   });
 }
 
 function showPlaceholder(headline: string, detail: string, retry = false): void {
-  usage.hidden = true;
+  usage.hidden = false;
+  usageModel.hidden = true;
+  usageBadges.hidden = true;
+  usageMeter.hidden = true;
+  usageProgress.hidden = true;
+  updated.hidden = true;
   mapCard.hidden = true;
   breakdownCard.hidden = true;
   mapSignature = null;
@@ -615,28 +707,39 @@ function renderContent(): void {
   renderUpdated();
   renderVersionBanner();
   if (!booted) {
-    showPlaceholder("正在连接 Collector…", "首次打开面板时，本地 Service 可能需要一点时间启动。");
+    showPlaceholder(
+      t(currentLocale, "connectingTitle"),
+      t(currentLocale, "connectingDetail"),
+    );
     return;
   }
   if (!session) {
-    showPlaceholder("没有打开的 session", "打开一个 session 后，这里会显示它的上下文占用。", true);
+    showPlaceholder(
+      t(currentLocale, "noSessionTitle"),
+      t(currentLocale, "noSessionDetail"),
+      true,
+    );
     return;
   }
   if (hostProblem !== null) {
-    showPlaceholder(hostProblem.title, hostProblem.detail, true);
+    showPlaceholder(
+      t(currentLocale, hostProblem.titleKey),
+      t(currentLocale, hostProblem.detailKey),
+      true,
+    );
     return;
   }
   if (!connected) {
     if (collectorReason === "unreachable") {
       showPlaceholder(
-        "Collector 没有响应",
-        "发现文件存在，但 Collector 没有响应。重启 OpenCode 后再试。",
+        t(currentLocale, "collectorUnreachableTitle"),
+        t(currentLocale, "collectorUnreachableDetail"),
         true,
       );
     } else {
       showPlaceholder(
-        "Collector 未运行",
-        `没有找到 Discovery file。把 Collector 安装到 ${COLLECTOR_INSTALL_PATH} 后重启 OpenCode。`,
+        t(currentLocale, "collectorNotRunning"),
+        t(currentLocale, "collectorNotRunningDetail", { path: COLLECTOR_INSTALL_PATH }),
         true,
       );
     }
@@ -644,18 +747,20 @@ function renderContent(): void {
   }
   if (summaryProblem !== null) {
     showPlaceholder(
-      summaryProblem === "timeout" ? "Collector 没有及时响应" : "快照暂时不可用",
       summaryProblem === "timeout"
-        ? "Service 等待 Collector 超时，稍后会自动重试。"
-        : "Collector 返回了意外结果，稍后会自动重试。",
+        ? t(currentLocale, "summaryTimeoutTitle")
+        : t(currentLocale, "summaryUnavailableTitle"),
+      summaryProblem === "timeout"
+        ? t(currentLocale, "summaryTimeoutDetail")
+        : t(currentLocale, "summaryUnavailableDetail"),
       true,
     );
     return;
   }
   if (!summary || summary.sessionID !== session.id) {
     showPlaceholder(
-      "还没有请求记录",
-      "Collector 已连接。在当前 session 发起一次请求后，这里会显示最后一次请求的构成。",
+      t(currentLocale, "waitingForFirstRequestTitle"),
+      t(currentLocale, "waitingForFirstRequestDetail"),
       true,
     );
     return;
@@ -664,7 +769,13 @@ function renderContent(): void {
 }
 
 function formatNumber(value: number): string {
-  return new Intl.NumberFormat("zh-CN").format(value);
+  return new Intl.NumberFormat(currentLocale === "zh" ? "zh-CN" : "en-US").format(value);
+}
+
+function itemCountLabel(count: number): string {
+  return count === 1
+    ? t(currentLocale, "itemCountOne")
+    : t(currentLocale, "itemCountMany", { items: formatNumber(count) });
 }
 
 function formatPercent(value: number): string {
@@ -689,7 +800,7 @@ function renderUpdated(): void {
   const date = new Date(collectedAt);
   if (Number.isNaN(date.getTime())) {
     updated.hidden = false;
-    updated.textContent = `更新于 ${collectedAt}`;
+    updated.textContent = t(currentLocale, "updatedToday", { clock: collectedAt });
     updated.title = collectedAt;
     return;
   }
@@ -701,9 +812,15 @@ function renderUpdated(): void {
   const clock = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
   updated.hidden = false;
   updated.textContent = sameDay
-    ? `更新于 ${clock}`
-    : `更新于 ${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
-  updated.title = `采集于 ${date.toLocaleString("zh-CN", { hour12: false })}`;
+    ? t(currentLocale, "updatedToday", { clock })
+    : t(currentLocale, "updatedOtherDay", {
+      month: date.getMonth() + 1,
+      day: date.getDate(),
+      clock,
+    });
+  updated.title = t(currentLocale, "collectedAtTitle", {
+    date: date.toLocaleString(currentLocale === "zh" ? "zh-CN" : "en-US", { hour12: false }),
+  });
 }
 
 function snapshotSignature(next: SnapshotSummary): string {
@@ -712,9 +829,43 @@ function snapshotSignature(next: SnapshotSummary): string {
     next.collectedAt,
     next.used,
     next.window,
+    zoom,
     next.categories.map((entry) => `${entry.category}:${entry.items}:${entry.tokens}`).join(","),
     next.items.length,
   ].join("|");
+}
+
+function compactNumber(value: number): string {
+  const safe = Math.max(0, Math.round(value));
+  if (safe < 1000) return String(safe);
+  const scaled = safe / 1000;
+  const digits = scaled >= 10 ? 0 : 1;
+  return `${scaled.toFixed(digits).replace(/\.0$/, "")}k`;
+}
+
+function mapDenominator(next: SnapshotSummary): number {
+  const fit = Math.min(
+    next.window > 0 ? next.window : Number.POSITIVE_INFINITY,
+    fitDenominator(next.used),
+  );
+  return Math.max(1, zoom === "window" ? next.window : fit);
+}
+
+function renderZoomLabel(next: SnapshotSummary): void {
+  const value = compactNumber(zoom === "window" ? next.window : mapDenominator(next));
+  zoomButton.textContent = t(
+    currentLocale,
+    zoom === "window" ? "zoomWindow" : "zoomFit",
+    { value },
+  );
+  zoomButton.title = t(currentLocale, "zoomTitle");
+}
+
+function toggleZoom(): void {
+  zoom = zoom === "window" ? "fit" : "window";
+  if (!summary) return;
+  mapSignature = null;
+  renderSummary(summary);
 }
 
 function roundPercent(value: number): string {
@@ -729,49 +880,53 @@ function cellBackground(cell: MapCell): string {
   return `linear-gradient(135deg, ${stops.join(", ")})`;
 }
 
+function categoryLabel(category: Category): string {
+  return t(currentLocale, CATEGORY_LABEL_KEYS[category]);
+}
+
 function cellLabel(cell: MapCell): string {
   return cell.segments
     .map(
       (segment) =>
-        `${CATEGORY_LABELS[segment.category]} ${formatNumber(Math.round(segment.tokens))} tokens`,
+        `${categoryLabel(segment.category)} ${t(currentLocale, "tokenCount", {
+          tokens: formatNumber(Math.round(segment.tokens)),
+        })}`,
     )
-    .join("；");
+    .join(t(currentLocale, "listSeparator"));
 }
 
 function renderMap(next: SnapshotSummary): void {
-  const layout = layoutMap(next.categories);
+  renderZoomLabel(next);
+  const denominator = mapDenominator(next);
+  const layout = layoutMap(next.categories, denominator);
   currentLayout = layout;
-
-  const bar = windowBar(next.used, next.window);
-  windowUsedBar.style.width = `${bar.fraction * 100}%`;
-  windowUsedBar.dataset.over = bar.over ? "true" : "false";
-  windowTrack.setAttribute("aria-valuenow", String(Math.round(bar.fraction * 100)));
-  windowTrack.setAttribute("aria-valuetext", `${formatPercent(bar.fraction * 100)}%`);
-  windowCaptionUsed.textContent =
-    `已用 ${formatNumber(bar.used)} / ${formatNumber(bar.window)} tokens`;
-  windowCaptionFree.textContent = bar.over
-    ? `Free space ${formatNumber(bar.free)} tokens · 已超出窗口`
-    : `Free space ${formatNumber(bar.free)} tokens`;
-  windowCaptionFree.classList.toggle("is-over", bar.over);
+  currentFreeTokens = Math.max(0, denominator - next.used);
+  freeLegendText.textContent = t(currentLocale, "freeLegend", {
+    value: compactNumber(currentFreeTokens),
+  });
+  usedLegendText.textContent = t(currentLocale, "usedLegend", {
+    value: compactNumber(next.used),
+  });
 
   hoveredCell = null;
   pinnedCell = null;
   hideTooltip();
   mapGrid.replaceChildren();
   cellElements = new Map();
-
-  const hasCells = layout.cells.length > 0;
-  mapGrid.hidden = !hasCells;
-  mapEmpty.hidden = hasCells;
-  mapHint.textContent = hasCells ? "悬停或点击格子查看分类" : "没有可绘制的已用上下文";
+  mapHint.textContent = t(currentLocale, "mapHint");
 
   for (const cell of layout.cells) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "cell";
+    button.className = cell.free ? "cell free" : "cell";
     button.tabIndex = -1;
-    button.style.background = cellBackground(cell);
-    button.setAttribute("aria-label", cellLabel(cell));
+    button.style.background = cell.free ? "" : cellBackground(cell);
+    button.setAttribute(
+      "aria-label",
+      cell.free
+        ? t(currentLocale, "freeCellLabel", { tokens: formatNumber(currentFreeTokens) })
+        : cellLabel(cell),
+    );
     button.dataset.index = String(cell.index);
 
     button.addEventListener("pointerenter", () => {
@@ -784,6 +939,10 @@ function renderMap(next: SnapshotSummary): void {
     });
     button.addEventListener("click", (event) => {
       event.stopPropagation();
+      if (cell.free) {
+        selectCategory(null);
+        return;
+      }
       pinnedCell = pinnedCell?.element === button ? null : { cell, element: button };
       refreshTooltip();
     });
@@ -804,28 +963,51 @@ function refreshTooltip(): void {
 
 function showTooltip(cell: MapCell, element: HTMLButtonElement): void {
   const fragment = document.createDocumentFragment();
-  for (const segment of cell.segments) {
+  if (cell.free) {
     const row = document.createElement("div");
     row.className = "tip-row";
     const dot = document.createElement("span");
-    dot.className = "swatch";
-    dot.style.background = `var(--cat-${segment.category})`;
+    dot.className = "swatch free";
     const name = document.createElement("span");
-    name.textContent = CATEGORY_LABELS[segment.category];
+    name.textContent = t(currentLocale, "freeSpace");
     const tokens = document.createElement("span");
     tokens.className = "tip-tokens";
-    tokens.textContent = `${formatNumber(Math.round(segment.tokens))} tokens`;
+    tokens.textContent = t(currentLocale, "tokenCount", {
+      tokens: formatNumber(currentFreeTokens),
+    });
     row.append(dot, name, tokens);
     fragment.append(row);
+    mapHint.textContent = t(currentLocale, "freeCellLabel", {
+      tokens: formatNumber(currentFreeTokens),
+    });
+  } else {
+    for (const segment of cell.segments) {
+      const row = document.createElement("div");
+      row.className = "tip-row";
+      const dot = document.createElement("span");
+      dot.className = "swatch";
+      dot.style.background = `var(--cat-${segment.category})`;
+      const name = document.createElement("span");
+      name.textContent = categoryLabel(segment.category);
+      const tokens = document.createElement("span");
+      tokens.className = "tip-tokens";
+      tokens.textContent = t(currentLocale, "tokenCount", {
+        tokens: formatNumber(Math.round(segment.tokens)),
+      });
+      row.append(dot, name, tokens);
+      fragment.append(row);
+    }
+    mapHint.textContent = cell.segments
+      .map(
+        (segment) =>
+          `${categoryLabel(segment.category)} ${t(currentLocale, "tokenCount", {
+            tokens: formatNumber(Math.round(segment.tokens)),
+          })}`,
+      )
+      .join(t(currentLocale, "listSeparator"));
   }
   mapTip.replaceChildren(fragment);
   mapTip.hidden = false;
-  mapHint.textContent = cell.segments
-    .map(
-      (segment) =>
-        `${CATEGORY_LABELS[segment.category]} ${formatNumber(Math.round(segment.tokens))}`,
-    )
-    .join(" · ");
   positionTooltip(element);
 }
 
@@ -848,9 +1030,7 @@ function hideTooltip(): void {
   mapTip.hidden = true;
   mapTip.replaceChildren();
   if (!mapCard.hidden) {
-    mapHint.textContent = currentLayout && currentLayout.cells.length > 0
-      ? "悬停或点击格子查看分类"
-      : "没有可绘制的已用上下文";
+    mapHint.textContent = t(currentLocale, "mapHint");
   }
 }
 
@@ -886,7 +1066,7 @@ function resetCopyFeedback(): void {
     window.clearTimeout(copyTimer);
     copyTimer = null;
   }
-  previewCopy.textContent = "复制";
+  previewCopy.textContent = t(currentLocale, "previewCopy");
   previewStatus.textContent = "";
   previewStatus.dataset.tone = "";
 }
@@ -994,20 +1174,23 @@ function renderBreakdown(): void {
     swatch.className = "swatch";
     swatch.style.background = `var(--cat-${category})`;
     const name = document.createElement("span");
-    name.textContent = CATEGORY_LABELS[category];
+    name.textContent = categoryLabel(category);
     drillTitle.append(swatch, name);
     const drillMeta = document.createElement("div");
     drillMeta.className = "drill-meta";
     drillMeta.textContent = row
-      ? `${formatNumber(row.items)} 条 · ${formatNumber(row.tokens)} tokens`
-      : `${formatNumber(items.length)} 条`;
+      ? t(currentLocale, "drillMeta", {
+        items: itemCountLabel(row.items),
+        tokens: formatNumber(row.tokens),
+      })
+      : itemCountLabel(items.length);
     drill.append(drillTitle, drillMeta);
     breakdownBody.append(drill);
 
     if (items.length === 0) {
       const empty = document.createElement("div");
       empty.className = "drill-empty";
-      empty.textContent = "这个分类没有可列出的条目。";
+      empty.textContent = t(currentLocale, "drillEmpty");
       breakdownBody.append(empty);
       return;
     }
@@ -1019,11 +1202,13 @@ function renderBreakdown(): void {
       itemRow.dataset.itemId = entry.id;
       const itemTitle = document.createElement("div");
       itemTitle.className = "item-title";
-      itemTitle.textContent = entry.title || "未命名条目";
+      itemTitle.textContent = entry.title || t(currentLocale, "unnamedItem");
       itemTitle.title = entry.title;
       const itemMeta = document.createElement("div");
       itemMeta.className = "item-meta";
-      itemMeta.textContent = `${formatNumber(entry.chars)} 字符`;
+      itemMeta.textContent = t(currentLocale, "itemChars", {
+        chars: formatNumber(entry.chars),
+      });
       itemRow.append(itemTitle, itemMeta);
       itemRow.addEventListener("click", () => { void openPreview(entry); });
       itemRow.addEventListener("focus", () => {
@@ -1051,10 +1236,13 @@ function renderBreakdown(): void {
     swatch.style.background = `var(--cat-${entry.category})`;
     const name = document.createElement("span");
     name.className = "row-name";
-    name.textContent = CATEGORY_LABELS[entry.category];
+    name.textContent = categoryLabel(entry.category);
     const meta = document.createElement("span");
     meta.className = "row-meta";
-    meta.textContent = `${formatNumber(entry.items)} 条 · ${formatNumber(entry.tokens)} tokens`;
+    meta.textContent = t(currentLocale, "drillMeta", {
+      items: itemCountLabel(entry.items),
+      tokens: formatNumber(entry.tokens),
+    });
     row.append(swatch, name, meta);
     row.addEventListener("click", () => selectCategory(entry.category));
     list.append(row);
@@ -1063,17 +1251,17 @@ function renderBreakdown(): void {
   const free = document.createElement("div");
   free.className = "row row-free";
   const freeSwatch = document.createElement("span");
-  freeSwatch.className = "swatch";
-  freeSwatch.style.background = "var(--cat-free)";
+  freeSwatch.className = "swatch free";
   const freeName = document.createElement("span");
   freeName.className = "row-name";
-  freeName.textContent = "Free space";
+  freeName.textContent = t(currentLocale, "freeSpace");
   const freeMeta = document.createElement("span");
   freeMeta.className = "row-meta";
   const bar = windowBar(summary.used, summary.window);
+  const freeTokens = t(currentLocale, "tokenCount", { tokens: formatNumber(bar.free) });
   freeMeta.textContent = bar.over
-    ? `${formatNumber(bar.free)} tokens · 已超出窗口`
-    : `${formatNumber(bar.free)} tokens`;
+    ? `${freeTokens} · ${t(currentLocale, "overWindow")}`
+    : freeTokens;
   freeMeta.classList.toggle("is-over", bar.over);
   free.append(freeSwatch, freeName, freeMeta);
   list.append(free);
@@ -1083,16 +1271,18 @@ function renderBreakdown(): void {
 }
 
 function renderPreview(state: PreviewState): void {
-  previewTitle.textContent = state.title || "未命名条目";
-  const suffix = state.truncated ? ` · 仅显示前 ${formatNumber(PREVIEW_MAX_CHARS)} 字符` : "";
+  previewTitle.textContent = state.title || t(currentLocale, "unnamedItem");
+  const suffix = state.truncated
+    ? t(currentLocale, "previewTruncated", { chars: formatNumber(PREVIEW_MAX_CHARS) })
+    : "";
   previewMeta.textContent =
-    `${CATEGORY_LABELS[state.category]} · ${formatNumber(state.chars)} 字符${suffix}`;
+    `${categoryLabel(state.category)} · ${t(currentLocale, "itemChars", { chars: formatNumber(state.chars) })}${suffix}`;
   previewBody.textContent = state.text;
   previewBody.hidden = state.loading || state.error !== null;
   previewCopy.disabled = state.loading || state.error !== null;
-  previewCopy.textContent = "复制";
+  previewCopy.textContent = t(currentLocale, "previewCopy");
   if (state.loading) {
-    previewStatus.textContent = "正在读取 Preview…";
+    previewStatus.textContent = t(currentLocale, "previewLoading");
     previewStatus.dataset.tone = "";
   } else if (state.error) {
     previewStatus.textContent = state.error;
@@ -1143,7 +1333,7 @@ async function openPreview(entry: ItemSummary): Promise<void> {
       preview = {
         ...preview,
         loading: false,
-        error: "无法读取这条 Item 的 Preview，请稍后重试。",
+        error: t(currentLocale, "previewReadError"),
       };
       renderBreakdown();
       return;
@@ -1151,7 +1341,7 @@ async function openPreview(entry: ItemSummary): Promise<void> {
 
     const detail = parseItemDetail(result.body);
     if (!detail) {
-      preview = { ...preview, loading: false, error: "Preview 数据格式不正确。" };
+      preview = { ...preview, loading: false, error: t(currentLocale, "previewBadFormat") };
       renderBreakdown();
       return;
     }
@@ -1173,7 +1363,7 @@ async function openPreview(entry: ItemSummary): Promise<void> {
     preview = {
       ...preview,
       loading: false,
-      error: "无法读取这条 Item 的 Preview，请稍后重试。",
+      error: t(currentLocale, "previewReadError"),
     };
     renderBreakdown();
   }
@@ -1183,7 +1373,7 @@ async function handlePreviewMissing(request: number): Promise<void> {
   if (request !== previewRequest) return;
   preview = null;
   previewRequest += 1;
-  notice = "快照已更新，已刷新";
+  notice = t(currentLocale, "previewMissingNotice");
   resetCopyFeedback();
   const fallback = focusedItemFallback;
   renderBreakdown();
@@ -1212,18 +1402,18 @@ async function copyPreview(): Promise<void> {
   if (preview?.itemId !== itemId) return;
 
   if (copied) {
-    previewStatus.textContent = "已复制 Preview 正文。";
+    previewStatus.textContent = t(currentLocale, "previewCopied");
     previewStatus.dataset.tone = "ok";
-    previewCopy.textContent = "已复制";
+    previewCopy.textContent = t(currentLocale, "previewCopiedButton");
     if (copyTimer !== null) window.clearTimeout(copyTimer);
     copyTimer = window.setTimeout(() => {
-      previewCopy.textContent = "复制";
+      previewCopy.textContent = t(currentLocale, "previewCopy");
       copyTimer = null;
     }, 1_500);
     return;
   }
 
-  previewStatus.textContent = "复制失败，请手动选择 Preview 正文。";
+  previewStatus.textContent = t(currentLocale, "previewCopyFailed");
   previewStatus.dataset.tone = "error";
 }
 
@@ -1269,6 +1459,9 @@ function parseItemDetail(body: string): SnapshotItemDetail | null {
 function renderSummary(next: SnapshotSummary): void {
   placeholder.hidden = true;
   usage.hidden = false;
+  usageModel.hidden = false;
+  usageMeter.hidden = false;
+  usageProgress.hidden = false;
   mapCard.hidden = false;
   breakdownCard.hidden = false;
 
@@ -1282,11 +1475,13 @@ function renderSummary(next: SnapshotSummary): void {
   progress.update({
     value: percent,
     tone: percent >= 85 ? "error" : percent >= 60 ? "warning" : "primary",
-    label: "已用",
+    label: t(currentLocale, "usedLabel"),
   });
 
   estimatedSlot.hidden = !next.estimated;
   assumedSlot.hidden = !next.windowAssumed;
+  baselineSlot.hidden = !next.baseline;
+  usageBadges.hidden = !(next.estimated || next.windowAssumed || next.baseline);
 
   const signature = snapshotSignature(next);
   if (signature === mapSignature) return;
@@ -1342,6 +1537,7 @@ function parseSummary(body: string): SnapshotSummary | null {
       || !isFiniteNumber(value.window)
       || typeof value.windowAssumed !== "boolean"
       || typeof value.estimated !== "boolean"
+      || (value.baseline !== undefined && typeof value.baseline !== "boolean")
       || typeof value.collectedAt !== "string"
       || !Array.isArray(value.categories)
       || !value.categories.every(isCategoryUsage)
@@ -1350,7 +1546,8 @@ function parseSummary(body: string): SnapshotSummary | null {
     ) {
       return null;
     }
-    return value as unknown as SnapshotSummary;
+    const parsed = value as unknown as SnapshotSummary;
+    return { ...parsed, baseline: value.baseline === true };
   } catch {
     return null;
   }
@@ -1409,10 +1606,12 @@ function renderRefreshBanner(): void {
   if (next !== null) {
     // 请求在途时收起 banner 的重试入口，避免和顶部/占位区按钮重复触发。
     banner.update({
-      ...next,
+      tone: next.tone,
+      title: t(currentLocale, next.titleKey),
+      body: t(currentLocale, next.bodyKey),
       action: manualLoading || refreshInFlight
         ? undefined
-        : { label: "重试", onClick: () => manualRefresh() },
+        : { label: t(currentLocale, "retry"), onClick: () => manualRefresh() },
     });
   }
 }
@@ -1423,7 +1622,7 @@ function syncRetryControls(): void {
   placeholderRetry.update({
     disabled: busy,
     loading: manualLoading,
-    label: manualLoading ? "重试中…" : "重试",
+    label: manualLoading ? t(currentLocale, "retrying") : t(currentLocale, "retry"),
   });
   renderRefreshBanner();
 }
@@ -1514,18 +1713,28 @@ async function runRefresh(trigger: RefreshTrigger): Promise<void> {
 
 function noteUnreachable(error: unknown, unexpected = false): void {
   booted = true;
-  // 已经有数据时静默保留，连续失败由 banner 统一提示；
-  // 但 host 明确不可用（未授权、暂停、Service 停止）时直接替换内容。
-  if (!isBlockingHostFailure(error) && (summary !== null || connected)) return;
+  // 已经有数据时静默保留内容，连续失败由 banner 统一提示；
+  // 但连接指示必须诚实反映当前 host / Service 状态。
+  if (!isBlockingHostFailure(error) && (summary !== null || connected)) {
+    const copy = unexpected
+      ? { titleKey: "unexpectedServiceTitle" as const, detailKey: "unexpectedServiceDetail" as const }
+      : failureOf(error);
+    renderStatus({ kind: "failed", titleKey: copy.titleKey, detailKey: copy.detailKey });
+    return;
+  }
 
   connected = false;
   summaryProblem = null;
   collectorReason = null;
   collectorOutdated = null;
   hostProblem = unexpected
-    ? { title: "Service 返回了意外结果", detail: "请稍后重试，或重新加载面板。" }
+    ? { titleKey: "unexpectedServiceTitle", detailKey: "unexpectedServiceDetail" }
     : failureOf(error);
-  renderStatus({ kind: "failed", ...hostProblem });
+  renderStatus({
+    kind: "failed",
+    titleKey: hostProblem.titleKey,
+    detailKey: hostProblem.detailKey,
+  });
   renderContent();
 }
 
@@ -1691,6 +1900,12 @@ host.onSessionLifecycle((event) => {
 
 host.onReady((context) => {
   applyHostReady(context, document.documentElement);
+  const locale = resolveLocale(context.locale);
+  if (locale !== currentLocale) {
+    currentLocale = locale;
+    renderStaticCopy();
+    renderContent();
+  }
   setSession(context.session);
   if (started) {
     reconcilePolling();

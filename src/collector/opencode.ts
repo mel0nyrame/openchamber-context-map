@@ -45,6 +45,7 @@ export interface ToolDefinition {
 
 export interface SessionContext {
   readonly sessionID: string;
+  agent: string;
   model: ModelRef;
   system?: SystemPart[];
   messages?: SessionMessage[];
@@ -79,6 +80,11 @@ export interface ModelListOutput {
   data?: ModelInfo[];
 }
 
+export interface SessionInfo {
+  agent?: string;
+  model?: ModelRef;
+}
+
 export interface SessionApi {
   hook?: (
     name: string,
@@ -86,6 +92,7 @@ export interface SessionApi {
     options?: unknown,
   ) => Promise<{ dispose: () => Promise<void> }>;
   context?: (input: { sessionID: string }) => Promise<SessionMessageInfo[] | unknown>;
+  get?: (input: { sessionID: string }) => Promise<SessionInfo | unknown>;
 }
 
 export interface ModelApi {

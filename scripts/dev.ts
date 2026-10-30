@@ -53,6 +53,10 @@ const fakeApi = {
         },
       };
     },
+    get: async (_input: { sessionID: string }) => ({
+      agent: "build",
+      model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
+    }),
     context: async (input: { sessionID: string }) => [
       {
         type: "assistant",
@@ -128,6 +132,7 @@ ${"     8: // …\n".repeat(40)}`;
 
 const DEV_FIXTURE = {
   sessionID: DEV_SESSION,
+  agent: "build",
   model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
   system: [
     { type: "text", text: SYSTEM_PROMPT },
@@ -369,7 +374,9 @@ const harness = `<!doctype html>
 <script>
   const CHANNEL = ${JSON.stringify(CHANNEL)};
   const API_VERSION = ${API_VERSION};
-  const themeMode = new URLSearchParams(location.search).get("theme") === "dark" ? "dark" : "light";
+  const params = new URLSearchParams(location.search);
+  const themeMode = params.get("theme") === "dark" ? "dark" : "light";
+  const locale = params.get("locale") === "en" ? "en-US" : "zh-CN";
   const tokens = themeMode === "dark" ? ${JSON.stringify(darkTokens)} : ${JSON.stringify(themeTokens)};
   const frame = document.getElementById("panel");
   const stateLabel = document.getElementById("devstate");
@@ -389,7 +396,7 @@ const harness = `<!doctype html>
     type: "ready",
     payload: {
       surface: "panel",
-      locale: "zh-CN",
+      locale,
       theme: { mode: themeMode, tokens },
       features: {},
       session: current,
@@ -408,7 +415,11 @@ const harness = `<!doctype html>
   }, "*");
   const findPanelRefresh = () => frame.contentDocument
     ? Array.from(frame.contentDocument.querySelectorAll("button"))
-      .find((node) => node.textContent.trim() === "刷新")
+      .find((node) => {
+        const label = node.getAttribute("aria-label");
+        return label === "刷新" || label === "Refresh"
+          || node.textContent.trim() === "刷新" || node.textContent.trim() === "Refresh";
+      })
     : null;
   const renderState = (note) => {
     const base = current ? currentName + " · " + (current.busy ? "busy" : "idle") : "无 session";
