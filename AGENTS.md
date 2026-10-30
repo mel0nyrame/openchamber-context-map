@@ -18,4 +18,5 @@ Issue 与 spec 存放在本仓库的 GitHub Issues（`mel0nyrame/openchamber-con
 
 - 改 `src/` 后跑 `bun run build`，把三个构建产物一起提交；扩展安装时不执行构建。理由见 `docs/adr/0004-build-artifacts-committed.md`。
 - 交付前 `bun test` 与 `bun run typecheck` 通过。
+- 面板的几何、取整与配色放纯函数模块（`src/panel/map.ts`、`src/panel/palette.ts`）并单测；主题用 `data-oc-theme` 选择器切换，不读系统偏好。
 - OpenCode V2 插件接口与已核实的事实见 `docs/opencode-plugin.md`。
