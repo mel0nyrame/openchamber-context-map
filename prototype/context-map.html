@@ -1,0 +1,1830 @@
+<!doctype html>
+<!--
+  PROTOTYPE — Context Map panel, three UI variants.
+  Question: what should the right-rail Context Map look like?
+  Run: bun prototype/server.ts, then open http://localhost:4173/?variant=A
+  Variants: A composition + inspector, B treemap, C ledger table.
+  This file is throwaway. Do not promote it directly.
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Context Map — prototype</title>
+<style>
+  :root {
+    --bg: #0a0c0f;
+    --surface: #0f1216;
+    --surface-2: #14181e;
+    --surface-3: #1a1f26;
+    --border: #232a33;
+    --border-strong: #303945;
+    --text: #e7ebf0;
+    --muted: #8b94a3;
+    --faint: #5f6875;
+    --accent: #7c9cff;
+    --green: #66d19e;
+    --radius: 10px;
+    --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .right { text-align: right; }
+  [hidden] { display: none !important; }
+
+  /* ---------- host app shell ---------- */
+  .app {
+    display: flex;
+    height: 100vh;
+    min-height: 680px;
+    overflow: hidden;
+  }
+
+  .sidebar {
+    width: 216px;
+    flex: 0 0 216px;
+    background: #0b0e12;
+    border-right: 1px solid var(--border);
+    padding: 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 2px 6px 10px;
+    font-weight: 650;
+    letter-spacing: -.01em;
+  }
+  .brand-mark {
+    width: 24px; height: 24px;
+    border-radius: 7px;
+    display: grid; place-items: center;
+    background: linear-gradient(145deg, #7c9cff, #4f6fe0);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .04em;
+  }
+  .new-session {
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    border-radius: 7px;
+    padding: 7px 9px;
+    text-align: left;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .new-session:hover { background: var(--surface-3); }
+  .side-label {
+    margin: 8px 6px 2px;
+    color: var(--faint);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+  }
+  .session {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 8px;
+    border-radius: 7px;
+    cursor: default;
+  }
+  .session:hover { background: var(--surface-2); }
+  .session.active { background: var(--surface-2); }
+  .s-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    margin-top: 5px;
+    background: var(--faint);
+    flex: 0 0 6px;
+  }
+  .session.active .s-dot { background: var(--green); }
+  .s-title { font-size: 12px; line-height: 1.3; }
+  .s-meta { color: var(--faint); font-size: 10.5px; margin-top: 2px; }
+  .sidebar-foot {
+    margin-top: auto;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 8px 6px;
+    border-top: 1px solid var(--border);
+  }
+
+  .chat {
+    flex: 1;
+    min-width: 280px;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+  }
+  .chat-head {
+    padding: 13px 22px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .chat-title { font-weight: 600; font-size: 13px; }
+  .hash { color: var(--faint); margin-right: 5px; }
+  .chat-meta { color: var(--faint); font-size: 10.5px; font-family: var(--mono); }
+  .messages {
+    flex: 1;
+    overflow: auto;
+    padding: 22px 26px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .msg { max-width: 640px; }
+  .role {
+    color: var(--faint);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    margin-bottom: 5px;
+  }
+  .bubble {
+    color: #c6cdd8;
+    font-size: 12.5px;
+    line-height: 1.65;
+  }
+  .msg.user .bubble { color: #dfe5ee; }
+  .composer { padding: 10px 22px 18px; }
+  .composer-box {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 9px;
+    padding: 10px 12px;
+    color: var(--faint);
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .send {
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 5px;
+    font-size: 10px;
+  }
+
+  .rail {
+    width: 48px;
+    flex: 0 0 48px;
+    border-left: 1px solid var(--border);
+    background: #0b0e12;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 9px 0;
+    gap: 4px;
+  }
+  .rail-btn {
+    width: 32px; height: 32px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--faint);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+  }
+  .rail-btn:hover { background: var(--surface-2); color: var(--muted); }
+  .rail-btn.active { background: var(--surface-3); color: var(--accent); }
+  .rail-spacer { flex: 1; }
+
+  /* ---------- panel ---------- */
+  .panel {
+    width: 640px;
+    flex: 0 0 640px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .panel-head {
+    flex: 0 0 auto;
+    padding: 14px 18px 11px;
+    border-bottom: 1px solid var(--border);
+  }
+  .title-row { display: flex; align-items: center; gap: 8px; }
+  .title-row h1 {
+    margin: 0;
+    font-size: 14.5px;
+    font-weight: 650;
+    letter-spacing: -.01em;
+  }
+  .live {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--green);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .09em;
+    border: 1px solid #234a3a;
+    background: #10241b;
+    padding: 2px 5px;
+    border-radius: 4px;
+  }
+  .live i {
+    width: 4px; height: 4px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 2px rgba(102, 209, 158, .14);
+  }
+  .panel-spacer { flex: 1; }
+  .icon-btn {
+    width: 26px; height: 26px;
+    display: grid; place-items: center;
+    border: 0; border-radius: 6px;
+    background: transparent;
+    color: var(--faint);
+    cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--surface-2); color: var(--text); }
+  .meta {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 10.5px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .dot-sep { color: #3b4450; }
+
+  .panel-body {
+    flex: 1;
+    min-height: 0;
+  }
+  .a-body {
+    padding: 14px 18px 18px;
+    overflow: auto;
+  }
+  .b-body {
+    padding: 10px 18px 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+  .c-body {
+    padding: 14px 18px 18px;
+    overflow: auto;
+    position: relative;
+  }
+
+  .section-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: var(--faint);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    margin-bottom: 7px;
+  }
+
+  /* ---------- variant A ---------- */
+  .a-body {
+    padding: 13px 18px 9px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+  .a-map-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 7px;
+    flex: 0 0 auto;
+  }
+  .a-label {
+    color: var(--faint);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+  }
+  .a-scale { color: var(--faint); font-size: 9.5px; white-space: nowrap; }
+  .a-map {
+    display: grid;
+    grid-template-columns: repeat(25, 1fr);
+    gap: 3px;
+    flex: 0 0 auto;
+  }
+  .a-cell {
+    aspect-ratio: 1;
+    border: 0;
+    border-radius: 2px;
+    padding: 0;
+    cursor: pointer;
+    transition: filter .12s ease, opacity .12s ease, transform .12s ease;
+  }
+  .a-cell:hover { filter: brightness(1.25); transform: scale(1.1); z-index: 2; }
+  .a-cell.dim { opacity: .16; }
+  .a-cell.active { outline: 1.5px solid #fff; outline-offset: -1.5px; z-index: 1; }
+  .a-window {
+    height: 5px;
+    border-radius: 999px;
+    background: #20262e;
+    overflow: hidden;
+    margin: 9px 0 7px;
+    flex: 0 0 auto;
+  }
+  .a-window span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--accent);
+  }
+  .a-map-foot {
+    display: flex;
+    justify-content: space-between;
+    gap: 2px 10px;
+    flex-wrap: wrap;
+    color: var(--faint);
+    font-size: 9.5px;
+    line-height: 1.4;
+    margin-bottom: 9px;
+    flex: 0 0 auto;
+  }
+  .a-list-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    color: var(--faint);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    padding: 0 7px 5px;
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+  }
+  .a-list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    margin: 0 -4px;
+    padding: 0 4px 2px;
+    scrollbar-width: thin;
+    scrollbar-color: #39414d transparent;
+  }
+  .a-list::-webkit-scrollbar { width: 6px; }
+  .a-list::-webkit-scrollbar-thumb { background: #39414d; border-radius: 999px; }
+  .a-list-preview { overflow: hidden; padding-bottom: 0; }
+  .a-keys {
+    flex-basis: 100%;
+    color: var(--faint);
+    font-size: 9px;
+  }
+  .a-tip {
+    position: absolute;
+    z-index: 20;
+    display: none;
+    max-width: 260px;
+    padding: 5px 7px;
+    border: 1px solid var(--border-strong);
+    border-radius: 5px;
+    background: #0b0e12;
+    color: var(--text);
+    font-size: 10px;
+    line-height: 1.5;
+    pointer-events: none;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+  }
+  .a-tip .tip-cat {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 9px;
+    white-space: nowrap;
+  }
+  .a-tip i { width: 6px; height: 6px; border-radius: 1px; display: inline-block; }
+
+  .cat-list { display: flex; flex-direction: column; gap: 1px; }
+  .cat-row {
+    display: grid;
+    grid-template-columns: 9px minmax(0, 1fr) 62px 46px 12px;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 6px 7px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+  }
+  .cat-row:hover, .cat-row:focus-visible { background: var(--surface-2); }
+  .cat-row:focus-visible, .item-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 2px;
+    display: inline-block;
+    flex: 0 0 8px;
+  }
+  .cat-main { display: block; min-width: 0; }
+  .cat-name {
+    font-size: 12.5px;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cat-count { color: var(--faint); font-size: 10px; margin-left: 4px; }
+  .cat-tokens { color: var(--muted); font-size: 10.5px; text-align: right; }
+  .cat-pct { font-size: 10.5px; text-align: right; }
+  .chev { color: var(--faint); font-size: 14px; line-height: 1; }
+  .a-free {
+    display: grid;
+    grid-template-columns: 9px minmax(0, 1fr) 62px 46px;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 7px;
+    border-top: 1px solid var(--border);
+    margin-top: 3px;
+    color: var(--muted);
+  }
+  .a-free .cat-name { font-size: 12px; }
+  .a-free .cat-count { color: var(--faint); }
+  .a-free .cat-tokens, .a-free .cat-pct { color: var(--faint); }
+  .a-preview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .a-list-preview .preview-body { flex: 1; max-height: none; min-height: 0; }
+
+  .detail-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .back-btn {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    padding: 3px 0;
+    cursor: pointer;
+    font-size: 11.5px;
+  }
+  .back-btn:hover { color: var(--text); }
+  .detail-total { color: var(--muted); font-size: 10.5px; }
+  .detail-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .detail-title .muted { font-weight: 400; font-size: 10.5px; margin-left: 2px; }
+  .item-list { display: flex; flex-direction: column; gap: 1px; }
+  .item-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 60px 46px 12px;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 9px 7px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+  }
+  .item-row:hover { background: var(--surface-2); }
+  .item-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item-tokens { color: var(--muted); font-size: 10.5px; text-align: right; }
+  .item-pct { color: var(--faint); font-size: 10.5px; text-align: right; }
+
+  .preview-title { font-size: 13.5px; font-weight: 650; margin-bottom: 3px; }
+  .preview-meta { color: var(--muted); font-size: 10.5px; margin-bottom: 10px; }
+  .preview-body {
+    margin: 0;
+    padding: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: #c9d1dc;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.62;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 390px;
+    overflow: auto;
+  }
+  .copy-btn, .ghost-btn {
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--muted);
+    border-radius: 5px;
+    padding: 3px 8px;
+    font-size: 10.5px;
+    cursor: pointer;
+  }
+  .copy-btn:hover, .ghost-btn:hover { color: var(--text); border-color: var(--border-strong); }
+
+  /* ---------- variant B ---------- */
+  .b-top {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+    min-height: 22px;
+  }
+  .breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11.5px;
+    color: var(--text);
+  }
+  .crumb-sep { color: var(--faint); }
+  .b-top .hint { margin: 0; text-align: right; }
+  .treemap {
+    position: relative;
+    flex: 1;
+    min-height: 300px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    overflow: hidden;
+  }
+  .tm-block {
+    position: absolute;
+    border: 0;
+    border-radius: 4px;
+    padding: 0;
+    cursor: pointer;
+    overflow: hidden;
+    text-align: left;
+    transition: filter .12s ease;
+  }
+  .tm-block:hover { filter: brightness(1.1); }
+  .tm-label {
+    position: absolute;
+    left: 8px; top: 7px; right: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -.01em;
+    color: inherit;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tm-sub {
+    position: absolute;
+    left: 8px; bottom: 6px; right: 8px;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    color: inherit;
+    opacity: .72;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .b-legend {
+    flex: 0 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    padding-top: 8px;
+    color: var(--faint);
+    font-size: 9.5px;
+  }
+  .legend-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .legend-item i { width: 6px; height: 6px; border-radius: 1px; display: inline-block; }
+
+  .sheet {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    max-height: 64%;
+    background: var(--surface-2);
+    border-top: 1px solid var(--border-strong);
+    box-shadow: 0 -22px 60px rgba(0, 0, 0, .55);
+    z-index: 5;
+    padding: 12px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    animation: sheetIn .16s ease-out;
+  }
+  @keyframes sheetIn {
+    from { transform: translateY(18px); opacity: .4; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  .sheet-grip {
+    width: 34px; height: 3px;
+    border-radius: 2px;
+    background: var(--border-strong);
+    margin: 0 auto 10px;
+  }
+  .sheet .preview-body { max-height: 340px; }
+  .preview-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .preview-head .preview-title { margin-bottom: 2px; }
+
+  /* ---------- variant C ---------- */
+  .c-summary {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .donut { width: 118px; height: 118px; flex: 0 0 118px; }
+  .c-stats { min-width: 0; }
+  .c-total { font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+  .c-total span { font-size: 10.5px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+  .c-sub { color: var(--muted); font-size: 10.5px; margin-top: 3px; }
+  .c-note { color: var(--faint); font-size: 10px; line-height: 1.5; margin-top: 8px; max-width: 330px; }
+  .c-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 7px;
+  }
+  .c-toolbar .section-label { margin: 0; }
+  .sort-group { display: flex; gap: 2px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 2px; }
+  .sort-btn {
+    border: 0;
+    background: transparent;
+    color: var(--faint);
+    font-size: 10px;
+    padding: 3px 7px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .sort-btn.active { background: var(--surface-3); color: var(--text); }
+  .table { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .table-head, .row, .subrow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 62px 46px 62px;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .table-head {
+    color: var(--faint);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+  }
+  .row {
+    width: 100%;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+  }
+  .row:last-child { border-bottom: 0; }
+  .row:hover { background: var(--surface-2); }
+  .row.expanded { background: var(--surface-2); }
+  .row .name { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .row .chev { font-size: 13px; transition: transform .12s ease; }
+  .row.expanded .chev { transform: rotate(90deg); }
+  .row-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .row-label > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-count { color: var(--faint); font-size: 9.5px; }
+  .row .mono { color: var(--muted); font-size: 10px; }
+  .bar-cell {
+    height: 4px;
+    background: var(--surface-3);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .bar-fill { display: block; height: 100%; border-radius: 2px; }
+  .subrow {
+    width: 100%;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: #0d1014;
+    color: var(--muted);
+    text-align: left;
+    cursor: pointer;
+    padding-left: 30px;
+  }
+  .subrow:hover { background: var(--surface-3); color: var(--text); }
+  .subrow .mono { font-size: 10px; }
+  .sub-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .drawer-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(4, 6, 8, .45);
+    z-index: 4;
+  }
+  .drawer {
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    width: 80%;
+    background: var(--surface-2);
+    border-left: 1px solid var(--border-strong);
+    box-shadow: -24px 0 60px rgba(0, 0, 0, .5);
+    z-index: 5;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    animation: drawerIn .16s ease-out;
+  }
+  @keyframes drawerIn {
+    from { transform: translateX(18px); opacity: .4; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  .drawer .preview-body { flex: 1; max-height: none; }
+  .drawer .preview-head { flex-direction: column; gap: 6px; }
+  .drawer .preview-head .ghost-btn { align-self: flex-end; }
+
+  /* ---------- prototype switcher ---------- */
+  .switcher {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: #f5f7fa;
+    color: #0b0d10;
+    border-radius: 999px;
+    padding: 5px 6px;
+    box-shadow: 0 10px 34px rgba(0, 0, 0, .5);
+    z-index: 100;
+    user-select: none;
+  }
+  .switcher .proto {
+    font-size: 8.5px;
+    font-weight: 800;
+    letter-spacing: .1em;
+    background: #f2cc60;
+    color: #0b0d10;
+    padding: 4px 6px;
+    border-radius: 4px;
+    margin-left: 2px;
+  }
+  .switcher button {
+    width: 28px; height: 28px;
+    border: 0;
+    border-radius: 50%;
+    background: #0b0d10;
+    color: #fff;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    display: grid;
+    place-items: center;
+  }
+  .switcher button:hover { background: #2a3340; }
+  .switcher .label {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
+    padding: 0 8px;
+    min-width: 178px;
+  }
+  .switcher .label strong {
+    font-size: 8.5px;
+    letter-spacing: .1em;
+    color: #5f6875;
+  }
+  .switcher .label span { font-size: 12px; font-weight: 650; }
+
+  @media (max-width: 1180px) {
+    .sidebar { display: none; }
+  }
+  @media (max-width: 920px) {
+    .chat { display: none; }
+    .panel { flex: 1 1 auto; width: auto; max-width: none; }
+  }
+  @media (max-width: 520px) {
+    .panel-head { padding: 12px 12px 10px; }
+    .meta { gap: 6px; }
+    .meta > span:nth-child(4), .meta > span:nth-child(5) { display: none; }
+    .a-body, .b-body, .c-body { padding-left: 12px; padding-right: 12px; }
+    .a-map { grid-template-columns: repeat(20, 1fr); }
+    .a-map-foot { font-size: 9px; }
+    .cat-row { grid-template-columns: 9px minmax(0, 1fr) 54px 40px 10px; gap: 6px; }
+    .a-free { grid-template-columns: 9px minmax(0, 1fr) 54px 40px; gap: 6px; }
+    .c-summary { gap: 12px; }
+    .donut { width: 92px; height: 92px; flex-basis: 92px; }
+    .c-total { font-size: 18px; }
+    .table-head, .row, .subrow { grid-template-columns: minmax(0, 1fr) 52px 40px; }
+    .table-head > :last-child, .row > :last-child, .subrow > :last-child { display: none; }
+    .switcher .label { min-width: 132px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">OC</span><span>OpenChamber</span></div>
+    <button class="new-session">+ New session</button>
+    <div class="side-label">Sessions</div>
+    <div class="session active">
+      <span class="s-dot"></span>
+      <div><div class="s-title">Context Map panel</div><div class="s-meta">just now · main</div></div>
+    </div>
+    <div class="session">
+      <span class="s-dot"></span>
+      <div><div class="s-title">Skills repo setup</div><div class="s-meta">2h ago · main</div></div>
+    </div>
+    <div class="session">
+      <span class="s-dot"></span>
+      <div><div class="s-title">Bun build pipeline</div><div class="s-meta">yesterday · main</div></div>
+    </div>
+    <div class="sidebar-foot">Settings</div>
+  </aside>
+
+  <main class="chat">
+    <div class="chat-head">
+      <div class="chat-title"><span class="hash">#</span>Context Map panel</div>
+      <div class="chat-meta">main · anthropic/claude-sonnet-4-5</div>
+    </div>
+    <div class="messages">
+      <div class="msg user">
+        <div class="role">You</div>
+        <div class="bubble">Add a Context Map panel on the right rail. A button, no <span class="mono">/context</span> command.</div>
+      </div>
+      <div class="msg assistant">
+        <div class="role">OpenCode</div>
+        <div class="bubble">The panel can't see the assembled prompt from the extension host alone, so this is a collector plugin plus a thin panel. I'll prototype three layouts first.</div>
+      </div>
+      <div class="msg user">
+        <div class="role">You</div>
+        <div class="bubble">Use the prototype skill and bun. Let me see the effect before we commit.</div>
+      </div>
+      <div class="msg assistant">
+        <div class="role">OpenCode</div>
+        <div class="bubble">Three variants: a composition bar with an inspector, a treemap, and a ledger table. Flip with the bar at the bottom.</div>
+      </div>
+    </div>
+    <div class="composer"><div class="composer-box"><span>Ask OpenCode…</span><span class="send">↵</span></div></div>
+  </main>
+
+  <section class="panel" id="panel">
+    <div class="panel-head">
+      <div class="title-row">
+        <h1>Context Map</h1>
+        <span class="live"><i></i>LIVE</span>
+        <span class="panel-spacer"></span>
+        <button class="icon-btn" title="Refresh" data-action="refresh" aria-label="Refresh">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 4v7h-7"/></svg>
+        </button>
+      </div>
+      <div class="meta">
+        <span class="mono" id="model-name">anthropic/claude-sonnet-4-5</span>
+        <span class="dot-sep">·</span>
+        <span><span class="mono" id="total-tokens">0</span> / <span class="mono" id="limit-tokens">0</span> tokens</span>
+        <span class="dot-sep">·</span>
+        <span class="mono" id="usage-pct">0%</span>
+      </div>
+    </div>
+
+    <div class="panel-body a-body" id="a-body" data-panel="A"></div>
+    <div class="panel-body b-body" id="b-body" data-panel="B" hidden></div>
+    <div class="panel-body c-body" id="c-body" data-panel="C" hidden></div>
+  </section>
+
+  <nav class="rail">
+    <button class="rail-btn" title="Chat" aria-label="Chat">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4V5z"/></svg>
+    </button>
+    <button class="rail-btn" title="Git" aria-label="Git">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 3-3 3.5-6 4.5"/></svg>
+    </button>
+    <button class="rail-btn" title="Context" aria-label="Context">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></svg>
+    </button>
+    <button class="rail-btn active" title="Context Map" aria-label="Context Map">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 4-6 2v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg>
+    </button>
+    <button class="rail-btn" title="Terminal" aria-label="Terminal">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4 6 5 5-5 5M12 16h8"/></svg>
+    </button>
+    <div class="rail-spacer"></div>
+    <button class="rail-btn" title="Settings" aria-label="Settings">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></svg>
+    </button>
+  </nav>
+</div>
+
+<div class="switcher">
+  <span class="proto">PROTOTYPE</span>
+  <button id="prev" aria-label="Previous variant">‹</button>
+  <div class="label"><strong>VARIANT <span id="variant-key">A</span></strong><span id="variant-name">Composition + inspector</span></div>
+  <button id="next" aria-label="Next variant">›</button>
+</div>
+
+<script>
+/* ------------------------------------------------------------------ data */
+const MODEL = "anthropic/claude-sonnet-4-5";
+const LIMIT = 200000;
+const L = (...xs) => xs.join("\n");
+
+const CATS = [
+  {
+    id: "system", name: "System", color: "#6ea8fe", unit: "parts",
+    items: [
+      { id: "sys-agent", name: "Agent instructions", tokens: 3120, preview: L(
+        "You are OpenCode, an AI coding agent running in a terminal.",
+        "",
+        "## Working in codebases",
+        "- Keep changes consistent with the structure, naming, and style of the surrounding code.",
+        "- Prefer the smallest change that correctly solves the problem.",
+        "- Treat unfamiliar files or changes as potential user work and investigate before overwriting.",
+        "",
+        "## Communication",
+        "- Use clear file paths when referring to files.",
+        "- Keep responses clear and concise, and avoid unnecessary technical jargon.",
+        "",
+        "## Tool use",
+        "- Prefer dedicated tools over shell commands when possible.",
+        "- Do not chain shell commands with separators like echo \"====\"; the output becomes noisy."
+      )},
+      { id: "sys-skills", name: "Skills: prototype, research, triage", tokens: 2480, preview: L(
+        "# Prototype",
+        "",
+        "A prototype is throwaway code that answers a question. The question decides the shape.",
+        "",
+        "## Pick a branch",
+        "- \"Does this logic / state model feel right?\" → LOGIC.md",
+        "- \"What should this look like?\" → UI.md",
+        "",
+        "## Rules that apply to both",
+        "1. Throwaway from day one, and clearly marked as such.",
+        "2. Trivial to run.",
+        "3. No persistence by default.",
+        "4. Skip the polish.",
+        "5. Surface the state.",
+        "6. Capture it when done."
+      )},
+      { id: "sys-context", name: "Project context (billion-context)", tokens: 1860, preview: L(
+        "<context key=\"openchamber.checkout\">",
+        "This session works in /Users/mac/Desktop/repo/openchamber-context-map,",
+        "with no branch checked out.",
+        "</context>",
+        "",
+        "<context key=\"openchamber.guidance\">",
+        "Link to this session with the openchamber tool's session.link, as soon as you know it,",
+        "each issue or pull or merge request the user gives you to work on, fix, investigate or review.",
+        "</context>",
+        "",
+        "<context key=\"openchamber.memory\">",
+        "The openchamber_memory tool keeps memory across sessions.",
+        "Save to it in the moment, without asking, when the user corrects how you work.",
+        "</context>"
+      )},
+      { id: "sys-env", name: "Environment & tool policy", tokens: 960, preview: L(
+        "Working directory: /Users/mac/Desktop/repo/openchamber-context-map",
+        "Platform: darwin",
+        "OpenChamber: 2.5.2",
+        "OpenCode: 2.2.2",
+        "Node: 22.14.0",
+        "Bun: 1.2.21",
+        "",
+        "Permission mode: allow edits, ask before destructive commands.",
+        "Available shells: zsh.",
+        "Network: enabled for package installs."
+      )}
+    ]
+  },
+  {
+    id: "tools", name: "Tool definitions", color: "#b48ead", unit: "tools",
+    items: [
+      { id: "tool-read", name: "read", tokens: 1840, preview: L(
+        "{",
+        "  \"name\": \"read\",",
+        "  \"description\": \"Read the contents of a file or directory.\",",
+        "  \"inputSchema\": {",
+        "    \"type\": \"object\",",
+        "    \"properties\": {",
+        "      \"path\": { \"type\": \"string\", \"description\": \"File or directory to read\" },",
+        "      \"offset\": { \"type\": \"number\", \"description\": \"Line to start from (1-based)\" },",
+        "      \"limit\": { \"type\": \"number\", \"description\": \"Maximum lines to read\" }",
+        "    },",
+        "    \"required\": [\"path\"]",
+        "  }",
+        "}"
+      )},
+      { id: "tool-edit", name: "edit", tokens: 2120, preview: L(
+        "{",
+        "  \"name\": \"edit\",",
+        "  \"description\": \"Edit a file by replacing exact text.\",",
+        "  \"inputSchema\": {",
+        "    \"type\": \"object\",",
+        "    \"properties\": {",
+        "      \"path\": { \"type\": \"string\" },",
+        "      \"oldString\": { \"type\": \"string\", \"description\": \"Exact text to find\" },",
+        "      \"newString\": { \"type\": \"string\", \"description\": \"Text to replace it with\" },",
+        "      \"replaceAll\": { \"type\": \"boolean\", \"default\": false }",
+        "    },",
+        "    \"required\": [\"path\", \"oldString\", \"newString\"]",
+        "  }",
+        "}"
+      )},
+      { id: "tool-bash", name: "bash", tokens: 2460, preview: L(
+        "{",
+        "  \"name\": \"bash\",",
+        "  \"description\": \"Run a shell command on macOS using zsh.\",",
+        "  \"inputSchema\": {",
+        "    \"type\": \"object\",",
+        "    \"properties\": {",
+        "      \"command\": { \"type\": \"string\" },",
+        "      \"workdir\": { \"type\": \"string\", \"description\": \"Working directory\" },",
+        "      \"timeout\": { \"type\": \"number\", \"description\": \"Timeout in milliseconds\" },",
+        "      \"background\": { \"type\": \"boolean\", \"default\": false }",
+        "    },",
+        "    \"required\": [\"command\"]",
+        "  }",
+        "}"
+      )},
+      { id: "tool-glob", name: "glob", tokens: 1180, preview: L(
+        "{",
+        "  \"name\": \"glob\",",
+        "  \"description\": \"Search file paths using a glob pattern.\",",
+        "  \"inputSchema\": {",
+        "    \"type\": \"object\",",
+        "    \"properties\": {",
+        "      \"pattern\": { \"type\": \"string\", \"description\": \"e.g. src/**/*.tsx\" },",
+        "      \"path\": { \"type\": \"string\", \"description\": \"Directory to search\" }",
+        "    },",
+        "    \"required\": [\"pattern\"]",
+        "  }",
+        "}"
+      )},
+      { id: "tool-grep", name: "grep", tokens: 1240, preview: L(
+        "{",
+        "  \"name\": \"grep\",",
+        "  \"description\": \"Search file contents using a regular expression.\",",
+        "  \"inputSchema\": {",
+        "    \"type\": \"object\",",
+        "    \"properties\": {",
+        "      \"pattern\": { \"type\": \"string\" },",
+        "      \"path\": { \"type\": \"string\" },",
+        "      \"include\": { \"type\": \"string\", \"description\": \"e.g. *.ts\" },",
+        "      \"literal\": { \"type\": \"boolean\", \"default\": false }",
+        "    },",
+        "    \"required\": [\"pattern\"]",
+        "  }",
+        "}"
+      )},
+      { id: "tool-webfetch", name: "webfetch", tokens: 1560, preview: L(
+        "{",
+        "  \"name\": \"webfetch\",",
+        "  \"description\": \"Fetch a URL and return text, markdown, or HTML.\",",
+        "  \"inputSchema\": {",
+        "    \"type\": \"object\",",
+        "    \"properties\": {",
+        "      \"url\": { \"type\": \"string\" },",
+        "      \"format\": { \"type\": \"string\", \"enum\": [\"text\", \"markdown\", \"html\"] },",
+        "      \"timeout\": { \"type\": \"number\", \"maximum\": 120 }",
+        "    },",
+        "    \"required\": [\"url\"]",
+        "  }",
+        "}"
+      )},
+      { id: "tool-task", name: "task", tokens: 2280, preview: L(
+        "{",
+        "  \"name\": \"task\",",
+        "  \"description\": \"Spawn a subagent to work on a task.\",",
+        "  \"inputSchema\": {",
+        "    \"type\": \"object\",",
+        "    \"properties\": {",
+        "      \"description\": { \"type\": \"string\" },",
+        "      \"prompt\": { \"type\": \"string\" },",
+        "      \"subagent_type\": { \"type\": \"string\", \"enum\": [\"explore\", \"general\"] }",
+        "    },",
+        "    \"required\": [\"description\", \"prompt\"]",
+        "  }",
+        "}"
+      )}
+    ]
+  },
+  {
+    id: "user", name: "User messages", color: "#8bd5a8", unit: "messages",
+    items: [
+      { id: "user-1", name: "Set up the repo skills", tokens: 1240, preview: L(
+        "The user explicitly mentioned these skills in their message: $setup-matt-pocock-skills.",
+        "Use the corresponding skill tool when it is relevant to accomplishing the user's request.",
+        "",
+        "Set up this repository so the Matt Pocock engineering skills are usable.",
+        "Pick an issue tracker, create the agent docs, and keep the docs in Chinese."
+      )},
+      { id: "user-2", name: "Add a Context Map panel", tokens: 860, preview: L(
+        "我最后的决策还是在 openchamber 右边加一个新的面板叫做 context map，",
+        "也就是加一个按钮，不需要命令 /context 来打开右边的面板，",
+        "现在我们来讨论一下细节。"
+      )},
+      { id: "user-3", name: "Prototype first, use bun", tokens: 1140, preview: L(
+        "1. 可以  2. 可以",
+        "3. 全部都做，可以使用 $prototype 先做一个原型出来看看效果",
+        "4. 可以  5. 可以",
+        "6. 我想做的就是 openchamber 的扩展，你可以看一下文档先：",
+        "https://docs.openchamber.dev/zh-cn/sdk/",
+        "然后我打算使用 bun 来完成项目的构建、安装依赖等等的工作。"
+      )}
+    ]
+  },
+  {
+    id: "assistant", name: "Assistant text", color: "#f2cc60", unit: "messages",
+    items: [
+      { id: "asst-1", name: "Plan: two-part architecture", tokens: 1820, preview: L(
+        "The extension iframe only receives theme, locale, directory, and a session snapshot.",
+        "It never sees the assembled system prompt, tool schemas, or token breakdown.",
+        "",
+        "So the panel needs a collector plugin on the OpenCode side and a thin host service",
+        "on the OpenChamber side. The collector captures the request at the context hook;",
+        "the service exposes it to the sandboxed panel over loopback."
+      )},
+      { id: "asst-2", name: "Panel entry is the rail icon", tokens: 1460, preview: L(
+        "`contributes.panel` creates the right-rail icon. Clicking it opens `plugin:context-map`.",
+        "No `/context` command is needed. The panel stays a sibling surface next to the built-in",
+        "Context panel, so both can coexist.",
+        "",
+        "The rail icon is the button the user asked for. An attach row would be a second entry",
+        "point with little benefit for v1."
+      )},
+      { id: "asst-3", name: "Prototype variants", tokens: 2130, preview: L(
+        "I'll build three structurally different layouts:",
+        "",
+        "A. a composition bar with an inspector;",
+        "B. a treemap that uses area for tokens;",
+        "C. a ledger table with expandable rows.",
+        "",
+        "All three use the same mock request so the comparison is fair. The switcher sits at",
+        "the bottom of the page and updates the `?variant=` query parameter."
+      )},
+      { id: "asst-4", name: "Implementation notes", tokens: 1500, preview: L(
+        "The collector keeps the last request per session in memory, capped at 20 sessions.",
+        "Summary counts are computed from the full text; previews are truncated on demand.",
+        "The service reads a 0600 discovery file and proxies to the collector.",
+        "",
+        "The panel polls the summary every two seconds while it is visible, and fetches item",
+        "text only when the user opens a preview."
+      )}
+    ]
+  },
+  {
+    id: "reasoning", name: "Reasoning", color: "#e58e73", unit: "blocks",
+    items: [
+      { id: "reason-1", name: "Why two parts", tokens: 1280, preview: L(
+        "A single extension can't reconstruct the request. The context hook is the only place",
+        "where the assembled system parts, tool schemas, messages, and options exist together.",
+        "",
+        "Capture there, render in the panel. The collector stays read-only; it never mutates",
+        "the request."
+      )},
+      { id: "reason-2", name: "Entry point", tokens: 1640, preview: L(
+        "The user rejected a slash command. The rail icon is the natural button, and",
+        "`contributes.panel` gives it for free. Adding an attach row would be a second entry",
+        "point with little benefit.",
+        "",
+        "The built-in Context panel stays. This is a sibling surface, not a replacement."
+      )},
+      { id: "reason-3", name: "Data bridge", tokens: 1460, preview: L(
+        "A file snapshot would put prompt text on disk and cap reads at 2 MB. A loopback service",
+        "keeps text in memory and lets the panel request one item at a time.",
+        "",
+        "The service reads a 0600 discovery file with the port and bearer token. The panel never",
+        "sees the token; it only calls `serviceRequest`."
+      )}
+    ]
+  },
+  {
+    id: "toolcalls", name: "Tool calls", color: "#67c9d6", unit: "calls",
+    items: [
+      { id: "call-1", name: "read handoff.md", tokens: 1120, preview: L(
+        "read({",
+        "  path: \"/var/folders/46/_s2q8ng96lbff2gfdmnnpwz40000gn/T/opencode/handoff-context-viewer-2026-10-30.md\"",
+        "})"
+      )},
+      { id: "call-2", name: "webfetch SDK docs", tokens: 980, preview: L(
+        "webfetch({",
+        "  url: \"https://docs.openchamber.dev/zh-cn/sdk/\",",
+        "  format: \"markdown\"",
+        "})"
+      )},
+      { id: "call-3", name: "write prototype/context-map.html", tokens: 1340, preview: L(
+        "write({",
+        "  path: \"prototype/context-map.html\",",
+        "  content: \"<!doctype html>…\"",
+        "})"
+      )},
+      { id: "call-4", name: "bash bun prototype/server.ts", tokens: 820, preview: L(
+        "bash({",
+        "  command: \"bun prototype/server.ts\",",
+        "  workdir: \"/Users/mac/Desktop/repo/openchamber-context-map\"",
+        "})"
+      )},
+      { id: "call-5", name: "edit package.json", tokens: 1000, preview: L(
+        "edit({",
+        "  path: \"package.json\",",
+        "  oldString: \"\\\"scripts\\\": {}\",",
+        "  newString: \"\\\"scripts\\\": { \\\"prototype\\\": \\\"bun prototype/server.ts\\\" }\"",
+        "})"
+      )}
+    ]
+  },
+  {
+    id: "toolresults", name: "Tool results", color: "#d98cb3", unit: "results",
+    items: [
+      { id: "res-1", name: "handoff.md", tokens: 2840, preview: L(
+        "# Handoff: Context viewer extension",
+        "",
+        "## Goal",
+        "Build an OpenChamber extension that inspects the model context: a proportional map,",
+        "a category legend, zoom, and previews of the system prompt, tool definitions, messages,",
+        "tool output, and reasoning.",
+        "",
+        "## Architecture",
+        "Two parts are necessary: an OpenCode V2 collector plugin captures the assembled request,",
+        "and an OpenChamber extension renders it. A single extension cannot see the assembled",
+        "system prompt, tool schemas, or token breakdown."
+      )},
+      { id: "res-2", name: "SDK docs", tokens: 2260, preview: L(
+        "# 构建扩展",
+        "",
+        "使用 `@openchamber/sdk` 为 OpenChamber 添加你自己的面板。扩展是一个小型网页，",
+        "OpenChamber 会把它显示在右侧栏。",
+        "",
+        "一个包含三个文件的文件夹：",
+        "- `package.json`，其中带有 `openchamber` 块（清单）",
+        "- `panel/index.html`，OpenChamber 显示的页面",
+        "- `panel/main.js`，你的脚本，需构建为单个经典文件（IIFE，而不是 ES 模块）",
+        "",
+        "打包命令依赖 Bun 运行：",
+        "bunx openchamber-guest-bundle panel/main.ts panel/main.js"
+      )},
+      { id: "res-3", name: "bun install", tokens: 920, preview: L(
+        "bun install v1.2.21",
+        "",
+        "+ @openchamber/sdk@2.5.3",
+        "+ typescript@5.9.3",
+        "",
+        "8 packages installed [1.2s]"
+      )},
+      { id: "res-4", name: "test output", tokens: 1100, preview: L(
+        "bun test v1.2.21",
+        "",
+        " 8 pass",
+        " 0 fail",
+        " 14 expect() calls",
+        "Ran 8 tests across 3 files. [0.42s]"
+      )}
+    ]
+  },
+  {
+    id: "other", name: "Other", color: "#8b93a1", unit: "items",
+    items: [
+      { id: "other-1", name: "Screenshot (image)", tokens: 1190, preview: L(
+        "[image] 1440×900 PNG · 284 KB",
+        "Alt: OpenChamber right rail with the Context Map panel open.",
+        "",
+        "The image is attached to the message and counted as one content part.",
+        "Token estimate uses the provider's image pricing, not characters / 4."
+      )}
+    ]
+  }
+];
+
+for (const c of CATS) c.tokens = c.items.reduce((n, i) => n + i.tokens, 0);
+const TOTAL = CATS.reduce((n, c) => n + c.tokens, 0);
+const MAP_CELLS = 200;
+const VARIANTS = {
+  A: "Composition + inspector",
+  B: "Treemap",
+  C: "Ledger table"
+};
+
+/* ------------------------------------------------------------------ utils */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const fmt = (n) => n.toLocaleString("en-US");
+const pct = (n, d = TOTAL) => (n / d * 100).toFixed(1);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const catById = (id) => CATS.find((c) => c.id === id);
+const itemById = (cid, iid) => catById(cid)?.items.find((i) => i.id === iid);
+
+function textOn(hex) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 142 ? "#0b0d10" : "#f4f7fb";
+}
+
+/* ------------------------------------------------------------------ state */
+let variant = "A";
+const state = {
+  A: { cat: null, item: null },
+  B: { cat: null, item: null },
+  C: { expanded: new Set(), item: null, sort: "tokens" }
+};
+
+/* ------------------------------------------------------------------ variant A */
+function mapCells() {
+  const cell = TOTAL / MAP_CELLS;
+  const cats = CATS.filter((c) => c.tokens > 0);
+  const selected = state.A.cat;
+  let ci = 0;
+  let offset = 0;
+  const out = [];
+
+  for (let n = 0; n < MAP_CELLS; n++) {
+    const start = n * cell;
+    const end = (n + 1) * cell;
+    while (ci < cats.length && offset + cats[ci].tokens <= start + 1e-9) {
+      offset += cats[ci].tokens;
+      ci++;
+    }
+    const parts = [];
+    let probe = ci;
+    let pos = offset;
+    while (probe < cats.length && pos < end - 1e-9) {
+      const c = cats[probe];
+      const take = Math.min(end, pos + c.tokens) - Math.max(start, pos);
+      if (take > 1e-9) parts.push({ cat: c, tokens: take });
+      pos += c.tokens;
+      probe++;
+    }
+    if (!parts.length) continue;
+
+    const primary = parts.reduce((a, b) => (b.tokens > a.tokens ? b : a));
+    let bg = primary.cat.color;
+    if (parts.length > 1) {
+      let acc = 0;
+      const stops = parts.map((p) => {
+        const share = p.tokens / cell * 100;
+        const stop = `${p.cat.color} ${acc.toFixed(1)}% ${(acc + share).toFixed(1)}%`;
+        acc += share;
+        return stop;
+      });
+      bg = `linear-gradient(135deg, ${stops.join(", ")})`;
+    }
+    const label = parts.map((p) => `${p.cat.name} ${fmt(Math.round(p.tokens))}`).join(" · ");
+    const tip = parts.map((p) => `<span class="tip-cat"><i style="background:${p.cat.color}"></i>${esc(p.cat.name)} <span class="mono">${fmt(Math.round(p.tokens))}</span></span>`).join("");
+    const active = selected && parts.some((p) => p.cat.id === selected);
+    out.push(`<button class="a-cell ${active ? "active" : ""} ${selected && !active ? "dim" : ""}"
+      style="background:${bg}"
+      data-action="open-category" data-category="${primary.cat.id}"
+      data-tip="${esc(tip)}"
+      tabindex="-1"
+      aria-label="Context block ${n + 1}: ${esc(label)}"></button>`);
+  }
+  return out.join("");
+}
+
+function categoryList() {
+  return `
+    <div class="cat-list">
+      ${CATS.map((c) => `
+        <button class="cat-row" data-action="open-category" data-category="${c.id}">
+          <span class="dot" style="background:${c.color}"></span>
+          <span class="cat-main">
+            <span class="cat-name">${esc(c.name)} <span class="cat-count">${c.items.length} ${c.unit}</span></span>
+          </span>
+          <span class="cat-tokens mono">${fmt(c.tokens)}</span>
+          <span class="cat-pct mono">${pct(c.tokens)}%</span>
+          <span class="chev">›</span>
+        </button>`).join("")}
+      <div class="a-free">
+        <span class="dot" style="background:#2a323d"></span>
+        <span class="cat-main">
+          <span class="cat-name">Free space <span class="cat-count">of ${fmt(LIMIT)} window</span></span>
+        </span>
+        <span class="cat-tokens mono">${fmt(LIMIT - TOTAL)}</span>
+        <span class="cat-pct mono">${pct(LIMIT - TOTAL, LIMIT)}%</span>
+      </div>
+    </div>`;
+}
+
+function detailList(cat) {
+  return `
+    <div class="detail-top">
+      <button class="back-btn" data-action="back-category">← All categories</button>
+      <span class="detail-total mono">${fmt(cat.tokens)} · ${pct(cat.tokens)}%</span>
+    </div>
+    <div class="detail-title">
+      <span class="dot" style="background:${cat.color}"></span>
+      ${esc(cat.name)}
+      <span class="muted">${cat.items.length} ${cat.unit}</span>
+    </div>
+    <div class="item-list">
+      ${cat.items.map((i) => `
+        <button class="item-row" data-action="open-item" data-category="${cat.id}" data-id="${i.id}">
+          <span class="item-name">${esc(i.name)}</span>
+          <span class="item-tokens mono">${fmt(i.tokens)}</span>
+          <span class="item-pct mono">${pct(i.tokens, cat.tokens)}%</span>
+          <span class="chev">›</span>
+        </button>`).join("")}
+    </div>`;
+}
+
+function inlinePreview(cat, item) {
+  return `
+    <div class="a-preview">
+      <div class="detail-top">
+        <button class="back-btn" data-action="back-item">← ${esc(cat.name)}</button>
+        <button class="copy-btn" data-action="copy" data-category="${cat.id}" data-id="${item.id}">Copy</button>
+      </div>
+      <div class="preview-title">${esc(item.name)}</div>
+      <div class="preview-meta">${esc(cat.name)} · <span class="mono">${fmt(item.tokens)} tokens</span> · <span class="mono">~${fmt(item.tokens * 4)} chars</span></div>
+      <pre class="preview-body">${esc(item.preview)}</pre>
+    </div>`;
+}
+
+function renderA() {
+  const s = state.A;
+  const cat = s.cat ? catById(s.cat) : null;
+  const item = s.item ? itemById(s.cat, s.item) : null;
+  const content = item ? inlinePreview(cat, item) : cat ? detailList(cat) : categoryList();
+  $("#a-body").innerHTML = `
+    <div class="a-map-head">
+      <span class="a-label">Used context map</span>
+      <span class="a-scale mono">1 cell = ${pct(1, MAP_CELLS)}% · ${fmt(Math.round(TOTAL / MAP_CELLS))} tokens</span>
+    </div>
+    <div class="a-map" role="group" aria-label="Map of used context by category">${mapCells()}</div>
+    <div class="a-window" title="${pct(TOTAL, LIMIT)}% of ${fmt(LIMIT)} tokens used"><span style="width:${pct(TOTAL, LIMIT)}%"></span></div>
+    <div class="a-map-foot">
+      <span>Split cells contain more than one category.</span>
+      <span class="mono">${pct(TOTAL, LIMIT)}% of ${fmt(LIMIT)} window</span>
+      <span class="a-keys">↑↓ / j k select · Enter inspect · Esc back</span>
+    </div>
+    ${cat ? "" : `<div class="a-list-head"><span>Categories</span><span>Tokens · share of used</span></div>`}
+    <div class="a-list ${item ? "a-list-preview" : ""}">${content}</div>
+    <div class="a-tip" id="a-tip"></div>`;
+}
+
+/* ------------------------------------------------------------------ variant B */
+function layout(items, x, y, w, h) {
+  if (!items.length) return [];
+  if (items.length === 1) return [{ ...items[0], x, y, w, h }];
+  const total = items.reduce((n, i) => n + i.weight, 0);
+  let acc = 0;
+  let split = 1;
+  let best = Infinity;
+  for (let i = 1; i < items.length; i++) {
+    acc += items[i - 1].weight;
+    const diff = Math.abs(acc - total / 2);
+    if (diff < best) { best = diff; split = i; }
+  }
+  const a = items.slice(0, split);
+  const b = items.slice(split);
+  const aw = a.reduce((n, i) => n + i.weight, 0);
+  const ratio = aw / total;
+  if (w >= h) {
+    return [
+      ...layout(a, x, y, w * ratio, h),
+      ...layout(b, x + w * ratio, y, w * (1 - ratio), h)
+    ];
+  }
+  return [
+    ...layout(a, x, y, w, h * ratio),
+    ...layout(b, x, y + h * ratio, w, h * (1 - ratio))
+  ];
+}
+
+function renderBSheet() {
+  const s = state.B;
+  const host = $("#b-sheet");
+  if (!host) return;
+  if (!s.item) { host.innerHTML = ""; return; }
+  const cat = catById(s.cat);
+  const item = itemById(s.cat, s.item);
+  host.innerHTML = `
+    <div class="sheet">
+      <div class="sheet-grip"></div>
+      <div class="preview-head">
+        <div>
+          <div class="preview-title">${esc(item.name)}</div>
+          <div class="preview-meta">${esc(cat.name)} · <span class="mono">${fmt(item.tokens)} tokens</span> · <span class="mono">~${fmt(item.tokens * 4)} chars</span></div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="ghost-btn" data-action="copy" data-category="${cat.id}" data-id="${item.id}">Copy</button>
+          <button class="ghost-btn" data-action="close-b">Close</button>
+        </div>
+      </div>
+      <pre class="preview-body">${esc(item.preview)}</pre>
+    </div>`;
+}
+
+function renderB() {
+  const s = state.B;
+  const cat = s.cat ? catById(s.cat) : null;
+  const entries = (cat ? cat.items.map((i) => ({
+    id: i.id, name: i.name, weight: i.tokens, color: cat.color,
+    sub: `${fmt(i.tokens)} tokens`, pct: pct(i.tokens, cat.tokens)
+  })) : CATS.map((c) => ({
+    id: c.id, name: c.name, weight: c.tokens, color: c.color,
+    sub: `${pct(c.tokens)}% · ${fmt(c.tokens)}`, pct: pct(c.tokens)
+  }))).sort((a, b) => b.weight - a.weight);
+
+  const crumbs = cat
+    ? `<button class="back-btn" data-action="back-b">← All context</button><span class="crumb-sep">/</span><span>${esc(cat.name)}</span>`
+    : `<span>All context</span><span class="muted">${CATS.length} categories</span>`;
+
+  $("#b-body").innerHTML = `
+    <div class="b-top">
+      <div class="breadcrumb">${crumbs}</div>
+      <div class="hint">${cat ? "Click an item to preview" : "Area = tokens · click to zoom"}</div>
+    </div>
+    <div class="treemap" id="b-treemap"></div>
+    <div class="b-legend">
+      ${CATS.map((c) => `<span class="legend-item"><i style="background:${c.color}"></i>${esc(c.name)}</span>`).join("")}
+    </div>
+    <div id="b-sheet"></div>`;
+
+  const tm = $("#b-treemap");
+  const rect = tm.getBoundingClientRect();
+  const blocks = layout(entries, 0, 0, rect.width, rect.height);
+  tm.innerHTML = blocks.map((b) => {
+    const w = Math.max(0, b.w - 4);
+    const h = Math.max(0, b.h - 4);
+    if (w < 6 || h < 6) return "";
+    const showLabel = w > 78 && h > 40;
+    const showSub = w > 78 && h > 58;
+    const attrs = cat
+      ? `data-action="open-item" data-category="${cat.id}" data-id="${b.id}"`
+      : `data-action="open-category" data-category="${b.id}"`;
+    return `<button class="tm-block"
+      style="left:${b.x + 2}px;top:${b.y + 2}px;width:${w}px;height:${h}px;background:${b.color};color:${textOn(b.color)}"
+      ${attrs} title="${esc(b.name)} · ${fmt(b.weight)} tokens (${b.pct}%)">
+      ${showLabel ? `<span class="tm-label">${esc(b.name)}</span>` : ""}
+      ${showSub ? `<span class="tm-sub">${b.sub}</span>` : ""}
+    </button>`;
+  }).join("");
+
+  renderBSheet();
+}
+
+/* ------------------------------------------------------------------ variant C */
+function donut() {
+  const r = 44;
+  const circ = 2 * Math.PI * r;
+  let off = 0;
+  const rings = CATS.map((c) => {
+    const len = c.tokens / TOTAL * circ;
+    const ring = `<circle cx="60" cy="60" r="${r}" fill="none" stroke="${c.color}" stroke-width="14"
+      stroke-dasharray="${len} ${circ - len}" stroke-dashoffset="${-off}" transform="rotate(-90 60 60)">
+      <title>${esc(c.name)} · ${fmt(c.tokens)} tokens (${pct(c.tokens)}%)</title></circle>`;
+    off += len;
+    return ring;
+  }).join("");
+  return `
+    <circle cx="60" cy="60" r="${r}" fill="none" stroke="#1a1f26" stroke-width="14"/>
+    ${rings}
+    <text x="60" y="56" text-anchor="middle" fill="#e7ebf0" font-size="15" font-weight="600" font-family="ui-monospace, Menlo, monospace">${(TOTAL / 1000).toFixed(1)}k</text>
+    <text x="60" y="72" text-anchor="middle" fill="#8b94a3" font-size="9" letter-spacing=".08em" font-family="ui-monospace, Menlo, monospace">TOKENS</text>`;
+}
+
+function rowHTML(c) {
+  const open = state.C.expanded.has(c.id);
+  const sub = open ? c.items.map((i) => `
+    <button class="subrow" data-action="open-c" data-category="${c.id}" data-id="${i.id}">
+      <span class="sub-name">${esc(i.name)}</span>
+      <span class="right mono">${fmt(i.tokens)}</span>
+      <span class="right mono">${pct(i.tokens)}%</span>
+      <span class="bar-cell"><span class="bar-fill" style="width:${pct(i.tokens)}%;background:${c.color}"></span></span>
+    </button>`).join("") : "";
+  return `
+    <button class="row ${open ? "expanded" : ""}" data-action="toggle-row" data-category="${c.id}">
+      <span class="name">
+        <span class="chev">›</span>
+        <span class="dot" style="background:${c.color}"></span>
+        <span class="row-label"><span>${esc(c.name)}</span><span class="row-count">${c.items.length} ${c.unit}</span></span>
+      </span>
+      <span class="right mono">${fmt(c.tokens)}</span>
+      <span class="right mono">${pct(c.tokens)}%</span>
+      <span class="bar-cell"><span class="bar-fill" style="width:${pct(c.tokens)}%;background:${c.color}"></span></span>
+    </button>${sub}`;
+}
+
+function renderCDrawer() {
+  const s = state.C;
+  const host = $("#c-drawer");
+  if (!host) return;
+  if (!s.item) { host.innerHTML = ""; return; }
+  const cat = catById(s.cat);
+  const item = itemById(s.cat, s.item);
+  host.innerHTML = `
+    <div class="drawer-backdrop" data-action="close-c"></div>
+    <div class="drawer">
+      <div class="preview-head">
+        <div>
+          <div class="preview-title">${esc(item.name)}</div>
+          <div class="preview-meta">${esc(cat.name)} · <span class="mono">${fmt(item.tokens)} tokens</span> · <span class="mono">~${fmt(item.tokens * 4)} chars</span></div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="ghost-btn" data-action="copy" data-category="${cat.id}" data-id="${item.id}">Copy</button>
+          <button class="ghost-btn" data-action="close-c">Close</button>
+        </div>
+      </div>
+      <pre class="preview-body">${esc(item.preview)}</pre>
+    </div>`;
+}
+
+function renderC() {
+  const s = state.C;
+  const sorted = [...CATS].sort(s.sort === "name"
+    ? (a, b) => a.name.localeCompare(b.name)
+    : (a, b) => b.tokens - a.tokens);
+  const itemCount = CATS.reduce((n, c) => n + c.items.length, 0);
+  $("#c-body").innerHTML = `
+    <div class="c-summary">
+      <svg class="donut" viewBox="0 0 120 120" aria-label="Context composition">${donut()}</svg>
+      <div class="c-stats">
+        <div class="c-total mono">${fmt(TOTAL)} <span>tokens</span></div>
+        <div class="c-sub">${pct(TOTAL, LIMIT)}% of ${fmt(LIMIT)} · ${CATS.length} categories · ${itemCount} items</div>
+        <div class="c-note">Token counts are estimated from characters and calibrated to provider usage. Open a row to see its items.</div>
+      </div>
+    </div>
+    <div class="c-toolbar">
+      <span class="section-label">Breakdown</span>
+      <div class="sort-group">
+        <button class="sort-btn ${s.sort === "tokens" ? "active" : ""}" data-action="sort" data-sort="tokens">Tokens</button>
+        <button class="sort-btn ${s.sort === "name" ? "active" : ""}" data-action="sort" data-sort="name">Name</button>
+      </div>
+    </div>
+    <div class="table">
+      <div class="table-head"><span>Category</span><span class="right">Tokens</span><span class="right">Share</span><span></span></div>
+      ${sorted.map(rowHTML).join("")}
+    </div>
+    <div id="c-drawer"></div>`;
+  renderCDrawer();
+}
+
+/* ------------------------------------------------------------------ switching */
+function renderActive() {
+  if (variant === "A") renderA();
+  else if (variant === "B") renderB();
+  else renderC();
+}
+
+function setVariant(v) {
+  variant = v;
+  const url = new URL(location.href);
+  url.searchParams.set("variant", v);
+  history.replaceState(null, "", url);
+  $$("[data-panel]").forEach((el) => { el.hidden = el.dataset.panel !== v; });
+  $("#variant-key").textContent = v;
+  $("#variant-name").textContent = VARIANTS[v];
+  renderActive();
+}
+
+function cycle(dir) {
+  const order = ["A", "B", "C"];
+  const i = order.indexOf(variant);
+  setVariant(order[(i + dir + order.length) % order.length]);
+}
+
+/* ------------------------------------------------------------------ events */
+$("#panel").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const a = btn.dataset.action;
+
+  if (a === "open-category") {
+    if (variant === "A") { state.A.cat = btn.dataset.category; state.A.item = null; renderA(); }
+    else if (variant === "B") { state.B.cat = btn.dataset.category; state.B.item = null; renderB(); }
+  }
+  if (a === "open-item") {
+    if (variant === "A") { state.A.item = btn.dataset.id; renderA(); }
+    else if (variant === "B") { state.B.item = btn.dataset.id; renderBSheet(); }
+  }
+  if (a === "back-category") { state.A.cat = null; state.A.item = null; renderA(); }
+  if (a === "back-item") { state.A.item = null; renderA(); }
+  if (a === "back-b") { state.B.cat = null; state.B.item = null; renderB(); }
+  if (a === "close-b") { state.B.item = null; renderBSheet(); }
+  if (a === "toggle-row") {
+    const id = btn.dataset.category;
+    if (state.C.expanded.has(id)) state.C.expanded.delete(id);
+    else state.C.expanded.add(id);
+    renderC();
+  }
+  if (a === "open-c") { state.C.cat = btn.dataset.category; state.C.item = btn.dataset.id; renderCDrawer(); }
+  if (a === "close-c") { state.C.item = null; renderCDrawer(); }
+  if (a === "sort") { state.C.sort = btn.dataset.sort; renderC(); }
+  if (a === "refresh") { renderActive(); }
+  if (a === "copy") {
+    const item = itemById(btn.dataset.category, btn.dataset.id);
+    if (item) {
+      navigator.clipboard?.writeText(item.preview).then(() => {
+        const old = btn.textContent;
+        btn.textContent = "Copied";
+        setTimeout(() => { btn.textContent = old; }, 1200);
+      }).catch(() => {});
+    }
+  }
+});
+
+$("#a-body").addEventListener("mouseover", (e) => {
+  if (variant !== "A") return;
+  const cell = e.target.closest(".a-cell");
+  const tip = $("#a-tip");
+  if (!cell || !tip) return;
+  tip.innerHTML = cell.dataset.tip || "";
+  tip.style.display = "block";
+  const r = cell.getBoundingClientRect();
+  const br = $("#a-body").getBoundingClientRect();
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  let left = r.left - br.left + r.width / 2 - tw / 2;
+  left = Math.max(4, Math.min(left, br.width - tw - 4));
+  let top = r.top - br.top - th - 6;
+  if (top < 0) top = r.bottom - br.top + 6;
+  top = Math.max(4, Math.min(top, br.height - th - 4));
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+});
+
+$("#a-body").addEventListener("mouseout", (e) => {
+  if (!e.target.closest(".a-cell")) return;
+  const tip = $("#a-tip");
+  if (tip) tip.style.display = "none";
+});
+
+document.addEventListener("keydown", (e) => {
+  if (variant !== "A" || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (!["ArrowDown", "ArrowUp", "j", "k"].includes(e.key)) return;
+  const body = $("#a-body");
+  if (!body) return;
+  const rows = Array.from(body.querySelectorAll(".cat-row, .item-row"));
+  if (!rows.length) return;
+  e.preventDefault();
+  const idx = rows.indexOf(document.activeElement);
+  let next;
+  if (e.key === "ArrowDown" || e.key === "j") next = Math.min(idx + 1, rows.length - 1);
+  else next = Math.max(idx - 1, 0);
+  rows[next].focus();
+});
+
+$("#prev").addEventListener("click", () => cycle(-1));
+$("#next").addEventListener("click", () => cycle(1));
+
+document.addEventListener("keydown", (e) => {
+  const tag = document.activeElement?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || document.activeElement?.isContentEditable) return;
+  if (e.key === "ArrowLeft") { e.preventDefault(); cycle(-1); }
+  if (e.key === "ArrowRight") { e.preventDefault(); cycle(1); }
+  if (e.key === "Escape") {
+    if (variant === "A" && state.A.item) { state.A.item = null; renderA(); }
+    else if (variant === "A" && state.A.cat) { state.A.cat = null; state.A.item = null; renderA(); }
+    else if (variant === "B" && state.B.item) { state.B.item = null; renderBSheet(); }
+    else if (variant === "C" && state.C.item) { state.C.item = null; renderCDrawer(); }
+  }
+});
+
+window.addEventListener("resize", () => {
+  if (variant === "B") renderB();
+});
+
+/* ------------------------------------------------------------------ boot */
+$("#model-name").textContent = MODEL;
+$("#total-tokens").textContent = fmt(TOTAL);
+$("#limit-tokens").textContent = fmt(LIMIT);
+$("#usage-pct").textContent = pct(TOTAL, LIMIT) + "%";
+
+const initial = (new URLSearchParams(location.search).get("variant") || "A").toUpperCase();
+setVariant(["A", "B", "C"].includes(initial) ? initial : "A");
+</script>
+</body>
+</html>
