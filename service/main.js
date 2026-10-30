@@ -106,27 +106,30 @@ async function probeCollector(record) {
 async function resolveRoute() {
   const entries = await readDiscoveryEntries(resolveDiscoveryDir());
   if (entries.length === 0) {
-    return { collector: null, status: { connected: false, reason: "not_found" } };
+    return { collectors: [], status: { connected: false, reason: "not_found" } };
   }
   const probed = await Promise.all(entries.map(async (entry) => ({ entry, status: await probeCollector(entry.record) })));
   let undeleted = false;
+  const live = [];
   for (const item of probed) {
-    if (item.status !== null)
+    if (item.status !== null) {
+      live.push({ entry: item.entry, status: item.status });
       continue;
+    }
     try {
       await removeDiscovery(item.entry.file);
     } catch {
       undeleted = true;
     }
   }
-  const hit = probed.find((item) => item.status !== null);
-  if (!hit || hit.status === null) {
+  const first = live[0];
+  if (!first) {
     return {
-      collector: null,
+      collectors: [],
       status: { connected: false, reason: undeleted ? "unreachable" : "not_found" }
     };
   }
-  return { collector: hit.entry.record, status: hit.status };
+  return { collectors: live.map((item) => item.entry.record), status: first.status };
 }
 var cachedRoute = null;
 async function route() {
@@ -140,42 +143,62 @@ function isTimeout(error) {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 async function forward(response, path, params) {
+  let collectors;
   try {
-    const collector = (await route()).collector;
-    if (!collector) {
-      sendJson(response, 503, { error: "collector_unavailable" });
-      return;
-    }
-    const query = new URLSearchParams(params).toString();
-    const upstream = await fetch(`http://127.0.0.1:${collector.port}${path}?${query}`, {
-      headers: { Authorization: `Bearer ${collector.token}` },
-      signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS)
-    });
-    if (upstream.status === 200) {
-      const body = await upstream.text();
-      response.writeHead(200, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": "no-store"
-      });
-      response.end(body);
-      return;
-    }
-    if (upstream.status === 400) {
-      sendJson(response, 400, { error: "bad_request" });
-      return;
-    }
-    if (upstream.status === 404) {
-      sendJson(response, 404, { error: "no_snapshot" });
-      return;
-    }
+    collectors = (await route()).collectors;
+  } catch {
     sendJson(response, 503, { error: "collector_unavailable" });
-  } catch (error) {
-    if (isTimeout(error)) {
-      sendJson(response, 504, { error: "collector_timeout" });
-      return;
-    }
-    sendJson(response, 503, { error: "collector_unavailable" });
+    return;
   }
+  if (collectors.length === 0) {
+    sendJson(response, 503, { error: "collector_unavailable" });
+    return;
+  }
+  const query = new URLSearchParams(params).toString();
+  const deadline = Date.now() + FORWARD_TIMEOUT_MS;
+  let sawNotFound = false;
+  let sawTimeout = false;
+  for (const collector of collectors) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      sawTimeout = true;
+      break;
+    }
+    try {
+      const upstream = await fetch(`http://127.0.0.1:${collector.port}${path}?${query}`, {
+        headers: { Authorization: `Bearer ${collector.token}` },
+        signal: AbortSignal.timeout(remaining)
+      });
+      if (upstream.status === 200) {
+        const body = await upstream.text();
+        response.writeHead(200, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store"
+        });
+        response.end(body);
+        return;
+      }
+      if (upstream.status === 400) {
+        sendJson(response, 400, { error: "bad_request" });
+        return;
+      }
+      if (upstream.status === 404) {
+        sawNotFound = true;
+      }
+    } catch (error) {
+      if (isTimeout(error))
+        sawTimeout = true;
+    }
+  }
+  if (sawNotFound && !sawTimeout) {
+    sendJson(response, 404, { error: "no_snapshot" });
+    return;
+  }
+  if (sawTimeout) {
+    sendJson(response, 504, { error: "collector_timeout" });
+    return;
+  }
+  sendJson(response, 503, { error: "collector_unavailable" });
 }
 var server = createServer((request, response) => {
   if (request.headers.authorization !== `Bearer ${token}`) {

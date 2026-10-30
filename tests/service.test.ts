@@ -272,6 +272,66 @@ test("Collector 对 /item 返回 404 时 Service 映射为 no_snapshot", async (
   expect(await response.json()).toEqual({ error: "no_snapshot" });
 });
 
+test("Service 在多个 Collector 中询问拥有该 session 的实例", async () => {
+  const older = startFakeCollector({ summary: { ...SUMMARY, used: 111 } });
+  const newer = startFakeCollector({ summaryStatus: 404 });
+  try {
+    const { base } = await startService(async (dir) => {
+      await writeDiscovery(dir, {
+        version: COLLECTOR_VERSION,
+        port: older.port!,
+        token: COLLECTOR_TOKEN,
+        pid: 1111,
+        startedAt: "2026-01-01T00:00:00.000Z",
+      });
+      await writeDiscovery(dir, {
+        version: COLLECTOR_VERSION,
+        port: newer.port!,
+        token: COLLECTOR_TOKEN,
+        pid: 2222,
+        startedAt: "2026-02-01T00:00:00.000Z",
+      });
+    });
+
+    const response = await fetch(`${base}/summary?sessionID=session-1`, { headers: hostAuth() });
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { used: number }).used).toBe(111);
+  } finally {
+    older.stop(true);
+    newer.stop(true);
+  }
+});
+
+test("所有 Collector 都返回 404 时 Service 返回 no_snapshot", async () => {
+  const first = startFakeCollector({ summaryStatus: 404 });
+  const second = startFakeCollector({ summaryStatus: 404 });
+  try {
+    const { base } = await startService(async (dir) => {
+      await writeDiscovery(dir, {
+        version: COLLECTOR_VERSION,
+        port: first.port!,
+        token: COLLECTOR_TOKEN,
+        pid: 3333,
+        startedAt: "2026-01-01T00:00:00.000Z",
+      });
+      await writeDiscovery(dir, {
+        version: COLLECTOR_VERSION,
+        port: second.port!,
+        token: COLLECTOR_TOKEN,
+        pid: 4444,
+        startedAt: "2026-02-01T00:00:00.000Z",
+      });
+    });
+
+    const response = await fetch(`${base}/summary?sessionID=missing`, { headers: hostAuth() });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "no_snapshot" });
+  } finally {
+    first.stop(true);
+    second.stop(true);
+  }
+});
+
 test("Collector 超时时 Service 返回 504", async () => {
   collector = startFakeCollector({ summary: SUMMARY, delaySummaryMs: 3_500 });
   const { base } = await startService(async () => {
