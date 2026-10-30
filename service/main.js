@@ -7,6 +7,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 // src/shared/version.ts
+var COLLECTOR_VERSION = "0.1.0";
+function normalizeCollectorVersion(value) {
+  return value.trim().replace(/^v/i, "");
+}
+function collectorVersionOutdated(actual, expected = COLLECTOR_VERSION) {
+  return normalizeCollectorVersion(actual) !== normalizeCollectorVersion(expected);
+}
 var DISCOVERY_DIR_ENV = "CONTEXT_MAP_DISCOVERY_DIR";
 var SERVICE_PORT_ENV = "OPENCHAMBER_SERVICE_PORT";
 var SERVICE_TOKEN_ENV = "OPENCHAMBER_SERVICE_TOKEN";
@@ -18,30 +25,34 @@ function resolveDiscoveryDir(env = process.env) {
     return override;
   return join(homedir(), ".local", "state", "openchamber-context-map", "collectors");
 }
+async function removeDiscovery(file) {
+  await rm(file, { force: true });
+}
 function isDiscoveryRecord(value) {
   if (typeof value !== "object" || value === null)
     return false;
   const record = value;
   return typeof record.version === "string" && typeof record.port === "number" && Number.isInteger(record.port) && record.port > 0 && record.port <= 65535 && typeof record.token === "string" && typeof record.pid === "number" && typeof record.startedAt === "string";
 }
-async function readDiscoveryRecords(dir) {
+async function readDiscoveryEntries(dir) {
   let names;
   try {
     names = await readdir(dir);
   } catch {
     return [];
   }
-  const records = [];
+  const entries = [];
   for (const name of names) {
     if (!name.endsWith(".json"))
       continue;
+    const file = join(dir, name);
     try {
-      const value = JSON.parse(await readFile(join(dir, name), "utf8"));
+      const value = JSON.parse(await readFile(file, "utf8"));
       if (isDiscoveryRecord(value))
-        records.push(value);
+        entries.push({ file, record: value });
     } catch {}
   }
-  return records.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  return entries.sort((a, b) => Date.parse(b.record.startedAt) - Date.parse(a.record.startedAt));
 }
 
 // src/service/main.ts
@@ -78,42 +89,59 @@ async function probeCollector(record) {
     const body = await response.json();
     if (body.ok !== true)
       return null;
-    return {
-      connected: true,
-      version: typeof body.version === "string" ? body.version : record.version
-    };
+    const version = typeof body.version === "string" ? body.version : record.version;
+    if (collectorVersionOutdated(version)) {
+      return {
+        connected: true,
+        version,
+        outdated: true,
+        expectedVersion: COLLECTOR_VERSION
+      };
+    }
+    return { connected: true, version };
   } catch {
     return null;
   }
 }
-async function collectorStatus() {
-  const records = await readDiscoveryRecords(resolveDiscoveryDir());
-  if (records.length === 0)
-    return { connected: false, reason: "not_found" };
-  const probed = await Promise.all(records.map((record) => probeCollector(record)));
-  return probed.find((status) => status !== null) ?? { connected: false, reason: "unreachable" };
+async function resolveRoute() {
+  const entries = await readDiscoveryEntries(resolveDiscoveryDir());
+  if (entries.length === 0) {
+    return { collector: null, status: { connected: false, reason: "not_found" } };
+  }
+  const probed = await Promise.all(entries.map(async (entry) => ({ entry, status: await probeCollector(entry.record) })));
+  let undeleted = false;
+  for (const item of probed) {
+    if (item.status !== null)
+      continue;
+    try {
+      await removeDiscovery(item.entry.file);
+    } catch {
+      undeleted = true;
+    }
+  }
+  const hit = probed.find((item) => item.status !== null);
+  if (!hit || hit.status === null) {
+    return {
+      collector: null,
+      status: { connected: false, reason: undeleted ? "unreachable" : "not_found" }
+    };
+  }
+  return { collector: hit.entry.record, status: hit.status };
 }
-var cachedCollector = null;
-async function activeCollector() {
-  if (cachedCollector && cachedCollector.expiresAt > Date.now()) {
-    return cachedCollector.record;
-  }
-  const records = await readDiscoveryRecords(resolveDiscoveryDir());
-  const probed = await Promise.all(records.map(async (record) => ({ record, status: await probeCollector(record) })));
-  const hit = probed.find((entry) => entry.status !== null);
-  if (!hit) {
-    cachedCollector = null;
-    return null;
-  }
-  cachedCollector = { record: hit.record, expiresAt: Date.now() + ROUTE_CACHE_MS };
-  return hit.record;
+var cachedRoute = null;
+async function route() {
+  if (cachedRoute && cachedRoute.expiresAt > Date.now())
+    return cachedRoute;
+  const resolved = await resolveRoute();
+  cachedRoute = { ...resolved, expiresAt: Date.now() + ROUTE_CACHE_MS };
+  return cachedRoute;
 }
 function isTimeout(error) {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 async function forward(response, path, params) {
   try {
-    const collector = await activeCollector();
+    const collector = (await route()).collector;
     if (!collector) {
       sendJson(response, 503, { error: "collector_unavailable" });
       return;
@@ -157,8 +185,8 @@ var server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   const path = url.pathname;
   if (request.method === "GET" && path === "/health") {
-    collectorStatus().then((collector) => {
-      sendJson(response, 200, { ok: true, collector });
+    route().then((resolved) => {
+      sendJson(response, 200, { ok: true, collector: resolved.status });
     });
     return;
   }
@@ -183,6 +211,7 @@ var server = createServer((request, response) => {
   }
   sendJson(response, 404, { error: "not_found" });
 });
+await route();
 server.listen(port, "127.0.0.1", () => {
   console.log(`[context-map] service listening on 127.0.0.1:${port}`);
 });

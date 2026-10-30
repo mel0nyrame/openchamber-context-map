@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -96,6 +96,7 @@ function startFakeCollector(options: {
   summaryStatus?: number;
   itemStatus?: number;
   delaySummaryMs?: number;
+  version?: string;
 } = {}): ReturnType<typeof Bun.serve> {
   return Bun.serve({
     hostname: "127.0.0.1",
@@ -110,7 +111,7 @@ function startFakeCollector(options: {
       });
 
       if (url.pathname === "/health") {
-        return Response.json({ ok: true, version: COLLECTOR_VERSION });
+        return Response.json({ ok: true, version: options.version ?? COLLECTOR_VERSION });
       }
       if (url.pathname === "/summary" && options.delaySummaryMs) {
         await Bun.sleep(options.delaySummaryMs);
@@ -132,14 +133,21 @@ function startFakeCollector(options: {
   });
 }
 
-async function discover(port: number): Promise<void> {
-  await writeDiscovery(discoveryDir!, {
-    version: COLLECTOR_VERSION,
+async function discoverAt(
+  port: number,
+  options: { pid?: number; startedAt?: string; version?: string } = {},
+): Promise<string> {
+  return writeDiscovery(discoveryDir!, {
+    version: options.version ?? COLLECTOR_VERSION,
     port,
     token: COLLECTOR_TOKEN,
-    pid: 4242,
-    startedAt: new Date().toISOString(),
+    pid: options.pid ?? 4242,
+    startedAt: options.startedAt ?? new Date().toISOString(),
   });
+}
+
+async function discover(port: number): Promise<void> {
+  await discoverAt(port);
 }
 
 const SUMMARY = {
@@ -287,4 +295,121 @@ test("Service 通过 discovery 报告 Collector 已连接及版本", async () =>
     ok: true,
     collector: { connected: true, version: COLLECTOR_VERSION },
   });
+});
+
+test("Service 启动时全量扫描并删除 stale discovery", async () => {
+  collector = startFakeCollector({ summary: SUMMARY });
+  const deadPort = await freePort();
+  const { base } = await startService(async () => {
+    await discoverAt(collector!.port!, {
+      pid: 1001,
+      startedAt: "2026-10-29T00:00:00.000Z",
+    });
+    await discoverAt(deadPort, {
+      pid: 1002,
+      startedAt: "2026-10-30T00:00:00.000Z",
+    });
+  });
+
+  const names = await readdir(discoveryDir!);
+  expect(names).toContain("collector-1001.json");
+  expect(names).not.toContain("collector-1002.json");
+
+  const response = await fetch(`${base}/summary?sessionID=session-1`, { headers: hostAuth() });
+  expect(response.status).toBe(200);
+});
+
+test("stale discovery 删除失败时跳过，不阻塞可用 Collector", async () => {
+  collector = startFakeCollector({ summary: SUMMARY });
+  const deadPort = await freePort();
+  try {
+    const { base } = await startService(async () => {
+      await discoverAt(collector!.port!, {
+        pid: 2001,
+        startedAt: "2026-10-29T00:00:00.000Z",
+      });
+      await discoverAt(deadPort, {
+        pid: 2002,
+        startedAt: "2026-10-30T00:00:00.000Z",
+      });
+      await chmod(discoveryDir!, 0o500);
+    });
+
+    const response = await fetch(`${base}/summary?sessionID=session-1`, { headers: hostAuth() });
+    expect(response.status).toBe(200);
+
+    const names = await readdir(discoveryDir!);
+    expect(names).toContain("collector-2002.json");
+  } finally {
+    if (discoveryDir) await chmod(discoveryDir, 0o700).catch(() => {});
+  }
+});
+
+test("缓存过期后重新发现并删除 stale，2 秒内复用路由", async () => {
+  collector = startFakeCollector({ summary: SUMMARY });
+  const deadPort = await freePort();
+  const { base } = await startService();
+
+  await discoverAt(collector!.port!, {
+    pid: 3001,
+    startedAt: "2026-10-29T00:00:00.000Z",
+  });
+  await discoverAt(deadPort, {
+    pid: 3002,
+    startedAt: "2026-10-30T00:00:00.000Z",
+  });
+
+  // 启动时的 not_found 缓存过期后，下一次请求会重新扫描。
+  await Bun.sleep(2_100);
+  const discovered = await fetch(`${base}/summary?sessionID=session-1`, { headers: hostAuth() });
+  expect(discovered.status).toBe(200);
+
+  const names = await readdir(discoveryDir!);
+  expect(names).toContain("collector-3001.json");
+  expect(names).not.toContain("collector-3002.json");
+
+  seen = [];
+  const cachedOne = await fetch(`${base}/summary?sessionID=session-1`, { headers: hostAuth() });
+  const cachedTwo = await fetch(`${base}/summary?sessionID=session-1`, { headers: hostAuth() });
+  expect(cachedOne.status).toBe(200);
+  expect(cachedTwo.status).toBe(200);
+  expect(seen.filter((entry) => entry.path === "/health").length).toBe(0);
+
+  await Bun.sleep(2_100);
+  const refreshed = await fetch(`${base}/summary?sessionID=session-1`, { headers: hostAuth() });
+  expect(refreshed.status).toBe(200);
+  expect(seen.filter((entry) => entry.path === "/health").length).toBe(1);
+}, 12_000);
+
+test("Collector 版本与扩展期望不符时报告过旧", async () => {
+  collector = startFakeCollector({ version: "0.0.9" });
+  const { base } = await startService(async () => {
+    await discoverAt(collector!.port!, { version: "0.0.9" });
+  });
+
+  const response = await fetch(`${base}/health`, { headers: hostAuth() });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    ok: true,
+    collector: {
+      connected: true,
+      version: "0.0.9",
+      outdated: true,
+      expectedVersion: COLLECTOR_VERSION,
+    },
+  });
+
+  const names = await readdir(discoveryDir!);
+  expect(names).toContain("collector-4242.json");
+});
+
+test("Collector 返回 500 时 Service 返回 503", async () => {
+  collector = startFakeCollector({ summaryStatus: 500 });
+  const { base } = await startService(async () => {
+    await discover(collector!.port!);
+  });
+
+  const response = await fetch(`${base}/summary?sessionID=session-1`, { headers: hostAuth() });
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ error: "collector_unavailable" });
 });

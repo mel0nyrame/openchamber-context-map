@@ -1,8 +1,17 @@
 import { createServer, type ServerResponse } from "node:http";
 
-import { readDiscoveryRecords, resolveDiscoveryDir } from "../shared/discovery.ts";
+import {
+  readDiscoveryEntries,
+  removeDiscovery,
+  resolveDiscoveryDir,
+} from "../shared/discovery.ts";
 import type { CollectorStatus, DiscoveryRecord } from "../shared/types.ts";
-import { SERVICE_PORT_ENV, SERVICE_TOKEN_ENV } from "../shared/version.ts";
+import {
+  COLLECTOR_VERSION,
+  collectorVersionOutdated,
+  SERVICE_PORT_ENV,
+  SERVICE_TOKEN_ENV,
+} from "../shared/version.ts";
 
 const PROBE_TIMEOUT_MS = 1_000;
 const FORWARD_TIMEOUT_MS = 3_000;
@@ -37,44 +46,72 @@ async function probeCollector(record: DiscoveryRecord): Promise<CollectorStatus 
     if (!response.ok) return null;
     const body = (await response.json()) as { ok?: unknown; version?: unknown };
     if (body.ok !== true) return null;
-    return {
-      connected: true,
-      version: typeof body.version === "string" ? body.version : record.version,
-    };
+    const version = typeof body.version === "string" ? body.version : record.version;
+    if (collectorVersionOutdated(version)) {
+      return {
+        connected: true,
+        version,
+        outdated: true,
+        expectedVersion: COLLECTOR_VERSION,
+      };
+    }
+    return { connected: true, version };
   } catch {
     return null;
   }
 }
 
-async function collectorStatus(): Promise<CollectorStatus> {
-  const records = await readDiscoveryRecords(resolveDiscoveryDir());
-  if (records.length === 0) return { connected: false, reason: "not_found" };
-
-  const probed = await Promise.all(records.map((record) => probeCollector(record)));
-  return probed.find((status): status is CollectorStatus => status !== null)
-    ?? { connected: false, reason: "unreachable" };
+interface ResolvedRoute {
+  collector: DiscoveryRecord | null;
+  status: CollectorStatus;
 }
 
-let cachedCollector: { record: DiscoveryRecord; expiresAt: number } | null = null;
+interface CachedRoute extends ResolvedRoute {
+  expiresAt: number;
+}
 
-/** 路由解析结果缓存 2 秒，避免每次面板轮询都重新探测全部 discovery。 */
-async function activeCollector(): Promise<DiscoveryRecord | null> {
-  if (cachedCollector && cachedCollector.expiresAt > Date.now()) {
-    return cachedCollector.record;
+/**
+ * 全量扫描 discovery：探活失败的条目是 stale discovery，尽量删掉后跳过。
+ * 删除失败只影响 reason 的措辞，不阻塞其它 Collector。
+ */
+async function resolveRoute(): Promise<ResolvedRoute> {
+  const entries = await readDiscoveryEntries(resolveDiscoveryDir());
+  if (entries.length === 0) {
+    return { collector: null, status: { connected: false, reason: "not_found" } };
   }
 
-  const records = await readDiscoveryRecords(resolveDiscoveryDir());
   const probed = await Promise.all(
-    records.map(async (record) => ({ record, status: await probeCollector(record) })),
+    entries.map(async (entry) => ({ entry, status: await probeCollector(entry.record) })),
   );
-  const hit = probed.find((entry) => entry.status !== null);
-  if (!hit) {
-    cachedCollector = null;
-    return null;
+
+  let undeleted = false;
+  for (const item of probed) {
+    if (item.status !== null) continue;
+    try {
+      await removeDiscovery(item.entry.file);
+    } catch {
+      undeleted = true;
+    }
   }
 
-  cachedCollector = { record: hit.record, expiresAt: Date.now() + ROUTE_CACHE_MS };
-  return hit.record;
+  const hit = probed.find((item) => item.status !== null);
+  if (!hit || hit.status === null) {
+    return {
+      collector: null,
+      status: { connected: false, reason: undeleted ? "unreachable" : "not_found" },
+    };
+  }
+  return { collector: hit.entry.record, status: hit.status };
+}
+
+let cachedRoute: CachedRoute | null = null;
+
+/** 路由与健康状态共用 2 秒缓存，避免面板轮询时反复探测全部 discovery。 */
+async function route(): Promise<CachedRoute> {
+  if (cachedRoute && cachedRoute.expiresAt > Date.now()) return cachedRoute;
+  const resolved = await resolveRoute();
+  cachedRoute = { ...resolved, expiresAt: Date.now() + ROUTE_CACHE_MS };
+  return cachedRoute;
 }
 
 function isTimeout(error: unknown): boolean {
@@ -87,7 +124,7 @@ async function forward(
   params: Record<string, string>,
 ): Promise<void> {
   try {
-    const collector = await activeCollector();
+    const collector = (await route()).collector;
     if (!collector) {
       sendJson(response, 503, { error: "collector_unavailable" });
       return;
@@ -137,8 +174,8 @@ const server = createServer((request, response) => {
   const path = url.pathname;
 
   if (request.method === "GET" && path === "/health") {
-    void collectorStatus().then((collector) => {
-      sendJson(response, 200, { ok: true, collector });
+    void route().then((resolved) => {
+      sendJson(response, 200, { ok: true, collector: resolved.status });
     });
     return;
   }
@@ -166,6 +203,9 @@ const server = createServer((request, response) => {
 
   sendJson(response, 404, { error: "not_found" });
 });
+
+// 启动时全量扫描一遍：清理 SIGKILL 留下的 stale discovery，并预热路由缓存。
+await route();
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`[context-map] service listening on 127.0.0.1:${port}`);

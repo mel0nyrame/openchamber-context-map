@@ -44,8 +44,13 @@ function isDiscoveryRecord(value: unknown): value is DiscoveryRecord {
     && typeof record.startedAt === "string";
 }
 
-/** 读取目录里所有可解析的 discovery 记录，最新的排在前面。 */
-export async function readDiscoveryRecords(dir: string): Promise<DiscoveryRecord[]> {
+export interface DiscoveryEntry {
+  file: string;
+  record: DiscoveryRecord;
+}
+
+/** 读取目录里所有可解析的 discovery 条目，最新的排在前面。 */
+export async function readDiscoveryEntries(dir: string): Promise<DiscoveryEntry[]> {
   let names: string[];
   try {
     names = await readdir(dir);
@@ -53,16 +58,24 @@ export async function readDiscoveryRecords(dir: string): Promise<DiscoveryRecord
     return [];
   }
 
-  const records: DiscoveryRecord[] = [];
+  const entries: DiscoveryEntry[] = [];
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
+    const file = join(dir, name);
     try {
-      const value: unknown = JSON.parse(await readFile(join(dir, name), "utf8"));
-      if (isDiscoveryRecord(value)) records.push(value);
+      const value: unknown = JSON.parse(await readFile(file, "utf8"));
+      if (isDiscoveryRecord(value)) entries.push({ file, record: value });
     } catch {
       // 写了一半或损坏的记录直接忽略。
     }
   }
 
-  return records.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  return entries.sort(
+    (a, b) => Date.parse(b.record.startedAt) - Date.parse(a.record.startedAt),
+  );
+}
+
+/** 读取目录里所有可解析的 discovery 记录，最新的排在前面。 */
+export async function readDiscoveryRecords(dir: string): Promise<DiscoveryRecord[]> {
+  return (await readDiscoveryEntries(dir)).map((entry) => entry.record);
 }

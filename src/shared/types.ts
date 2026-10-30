@@ -64,4 +64,7 @@ export interface CollectorStatus {
   connected: boolean;
   version?: string;
   reason?: "not_found" | "unreachable";
+  /** Collector 报告的版本与扩展期望不一致。 */
+  outdated?: boolean;
+  expectedVersion?: string;
 }
