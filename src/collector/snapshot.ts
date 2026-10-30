@@ -14,7 +14,7 @@ export const HEAD_LIMIT = 200;
 /** 模型窗口未知时的默认值。 */
 export const DEFAULT_WINDOW = 200_000;
 
-const CHARS_PER_TOKEN = 4;
+export const CHARS_PER_TOKEN = 4;
 const TITLE_LIMIT = 80;
 const TITLE_SCAN_LIMIT = 400;
 
@@ -218,6 +218,20 @@ export function buildDraft(context: SessionContext, collectedAt: string): Snapsh
     chars,
     hasMedia,
   };
+}
+
+/** 只保留 system 与工具定义，作为首请求前的基线模板。 */
+export function baselineDraft(draft: SnapshotDraft): SnapshotDraft {
+  const counts = emptyCounts();
+  const chars = emptyCounts();
+  const items = draft.items.filter(
+    (item) => item.category === "system" || item.category === "toolDefinitions",
+  );
+  for (const item of items) {
+    counts[item.category] += 1;
+    chars[item.category] += item.chars;
+  }
+  return { ...draft, items, counts, chars, hasMedia: false };
 }
 
 function distribute(raw: number[], target: number): number[] {
