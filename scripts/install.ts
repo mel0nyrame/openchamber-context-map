@@ -51,7 +51,7 @@ interface PackageManifest {
         entry?: string;
         permissions?: {
           exec?: string[];
-          sockets?: Array<{ id?: string }>;
+          sockets?: Array<string | { id?: string }>;
         };
       };
     };
@@ -222,7 +222,7 @@ async function install(): Promise<void> {
   const serviceScope = {
     exec: service.permissions?.exec ?? [],
     sockets: (service.permissions?.sockets ?? [])
-      .map((socket) => socket.id)
+      .map((socket) => (typeof socket === "string" ? socket : socket.id))
       .filter((id): id is string => typeof id === "string" && id.length > 0),
   };
 
@@ -246,17 +246,17 @@ async function install(): Promise<void> {
 
   console.log("[2/3] Collector");
   const collectorSource = await readFile(join(repoRoot, "collector/main.js"), "utf8");
-  const desired = collectorFileContent(collectorSource, COLLECTOR_VERSION);
+  const collectorContent = collectorFileContent(collectorSource, COLLECTOR_VERSION);
   if (collector.state === "missing") {
     await mkdir(paths.pluginsDir, { recursive: true });
-    await writeFile(paths.collectorPath, desired, "utf8");
+    await writeFile(paths.collectorPath, collectorContent, "utf8");
     console.log(`  已复制：${paths.collectorPath}（v${COLLECTOR_VERSION}）`);
     changed = true;
-  } else if (collector.content === desired) {
+  } else if (collector.content === collectorContent) {
     console.log(`  已是最新，跳过：${paths.collectorPath}（v${COLLECTOR_VERSION}）`);
   } else {
     const previous = readCollectorVersion(collector.content ?? "");
-    await writeFile(paths.collectorPath, desired, "utf8");
+    await writeFile(paths.collectorPath, collectorContent, "utf8");
     const versionNote = previous && previous !== COLLECTOR_VERSION
       ? `${previous} -> ${COLLECTOR_VERSION}`
       : "构建产物已更新";
@@ -306,6 +306,9 @@ async function uninstallExtension(): Promise<void> {
   console.log(`  仓库：${repoRootReal}`);
   console.log("");
 
+  // 先读清单：清单损坏时在删除任何文件之前停止，避免卸载到一半。
+  const store = await readStore();
+
   let changed = false;
   let blocked = false;
 
@@ -337,7 +340,6 @@ async function uninstallExtension(): Promise<void> {
   }
 
   console.log("[3/3] 扩展清单");
-  const store = await readStore();
   const removal = unregisterExtension(store, {
     path: paths.extensionPath,
     guestId: EXTENSION_GUEST_ID,

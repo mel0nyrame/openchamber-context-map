@@ -90,9 +90,9 @@ export function collectorFileContent(source: string, version: string): string {
   return `${collectorHeader(version)}\n${source}`;
 }
 
-/** 读取已安装 Collector 的版本；不是本工具生成的文件返回 null。 */
+/** 读取已安装 Collector 的版本；标记必须在文件开头，避免把正文提到该字符串的用户插件当成自己的。 */
 export function readCollectorVersion(content: string): string | null {
-  const match = /^\/\/ @context-map-collector v(\S+)\s*$/m.exec(content);
+  const match = /^\/\/ @context-map-collector v(\S+)[^\n]*/.exec(content);
   return match?.[1] ?? null;
 }
 
@@ -206,7 +206,10 @@ export function registerExtension(
   let scopeUpdated = false;
 
   if (!scopeMatches) {
-    guestScope.service = desiredScope;
+    guestScope.service = {
+      ...(isRecord(guestScope.service) ? guestScope.service : {}),
+      ...desiredScope,
+    };
     scopes[options.guestId] = guestScope;
     next.capabilityScopes = scopes;
     scopeUpdated = true;

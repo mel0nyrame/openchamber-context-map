@@ -100,6 +100,12 @@ test("Collector 文件用首行标记区分归属与版本", () => {
   expect(classifyCollectorContent("export default {};\n")).toBe("conflict");
 });
 
+test("Collector 标记只在文件开头生效", () => {
+  expect(readCollectorVersion("// @context-map-collector v0.1.0\nexport default {};\n")).toBe("0.1.0");
+  expect(readCollectorVersion("export default {};\n// @context-map-collector v0.1.0\n")).toBeNull();
+  expect(readCollectorVersion("const note = \"// @context-map-collector v0.1.0\";\n")).toBeNull();
+});
+
 test("extensions.json 只接受宿主认识的字段形状", () => {
   expect(parseExtensionStore({ paths: [] })).toEqual({ paths: [] });
   expect(parseExtensionStore({
@@ -176,6 +182,26 @@ test("已授权 service 时新增路径会同步权限范围", () => {
   expect(result.store.paths).toEqual(["/extensions/old", "/extensions/new"]);
   expect(result.store.capabilityScopes).toEqual({
     [EXTENSION_GUEST_ID]: { service: { exec: [], sockets: [] } },
+  });
+});
+
+test("同步 service 权限范围时保留未知子字段", () => {
+  const store = {
+    paths: ["/extensions/context-map"],
+    capabilityGrants: { [EXTENSION_GUEST_ID]: ["service"] },
+    capabilityScopes: {
+      [EXTENSION_GUEST_ID]: { service: { exec: ["ps"], sockets: [], note: "keep" } },
+    },
+  };
+  const result = registerExtension(store, {
+    path: "/extensions/context-map",
+    guestId: EXTENSION_GUEST_ID,
+    serviceScope: { exec: ["lsof"], sockets: ["s1"] },
+  });
+
+  expect(result.scopeUpdated).toBe(true);
+  expect(result.store.capabilityScopes).toEqual({
+    [EXTENSION_GUEST_ID]: { service: { exec: ["lsof"], sockets: ["s1"], note: "keep" } },
   });
 });
 
