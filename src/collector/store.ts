@@ -19,12 +19,18 @@ export class SnapshotStore {
   #nextId = 1;
 
   add(draft: SnapshotDraft): StoredSnapshot {
-    const record: StoredSnapshot = {
-      id: this.#nextId,
-      draft,
-      summary: finalizeSnapshot(draft, null, DEFAULT_WINDOW, true),
-    };
+    const id = this.#nextId;
     this.#nextId += 1;
+    // 条目 id 带上快照版本：旧 id 在新快照里一定找不到，Service 会返回 404。
+    const stamped: SnapshotDraft = {
+      ...draft,
+      items: draft.items.map((item) => ({ ...item, id: `${item.id}@${id}` })),
+    };
+    const record: StoredSnapshot = {
+      id,
+      draft: stamped,
+      summary: finalizeSnapshot(stamped, null, DEFAULT_WINDOW, true),
+    };
 
     this.#records.delete(draft.sessionID);
     this.#records.set(draft.sessionID, record);

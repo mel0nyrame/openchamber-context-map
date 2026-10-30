@@ -235,7 +235,7 @@ test("快照按 8 分类统计，并把字符估算缩放到 provider 的 Used",
   });
 
   expect(summary.items).toHaveLength(9);
-  expect(summary.items.find((item) => item.id === "toolCalls:0")?.title).toBe("read");
+  expect(summary.items.find((item) => item.id.startsWith("toolCalls:0@"))?.title).toBe("read");
   for (const item of summary.items) {
     expect(item.head.length).toBeLessThanOrEqual(200);
   }
@@ -355,7 +355,7 @@ test("同一 session 只保留最后一次请求", async () => {
     "session-1",
     (value) => value.items.some((item) => item.head === "second"),
   );
-  expect(summary.items.find((item) => item.id === "userMessages:0")?.chars).toBe(6);
+  expect(summary.items.find((item) => item.id.startsWith("userMessages:0@"))?.chars).toBe(6);
   expect(summary.items.some((item) => item.head === "first")).toBe(false);
 });
 
@@ -390,11 +390,11 @@ test("每条预览最多 8000 字符，head 最多 200 字符", async () => {
     "session-1",
     (value) => value.items.some((item) => item.chars === 9_000),
   );
-  const item = summary.items.find((entry) => entry.id === "userMessages:0");
+  const item = summary.items.find((entry) => entry.id.startsWith("userMessages:0@"));
   expect(item?.head).toHaveLength(200);
 
   const detailResponse = await fetch(
-    `http://127.0.0.1:${port}/item?sessionID=session-1&itemId=userMessages:0`,
+    `http://127.0.0.1:${port}/item?sessionID=session-1&itemId=${encodeURIComponent(item!.id)}`,
     { headers: auth(token) },
   );
   expect(detailResponse.status).toBe(200);
@@ -474,6 +474,39 @@ test("Collector 对未知 itemId 返回 404", async () => {
   );
   expect(unknownItem.status).toBe(404);
   expect(await unknownItem.json()).toEqual({ error: "not_found" });
+});
+
+test("快照被替换后旧 itemId 返回 404", async () => {
+  const { port, token, fake } = await startCollector({ models: MODELS });
+
+  await fake.fire({
+    ...baseContext(),
+    messages: [{ role: "user", content: [{ type: "text", text: "first" }] }],
+  });
+  const first = await waitForSummary(
+    port,
+    token,
+    "session-1",
+    (value) => value.items.some((item) => item.head === "first"),
+  );
+  const stale = first.items.find((item) => item.id.startsWith("userMessages:0@"))!;
+
+  await fake.fire({
+    ...baseContext(),
+    messages: [{ role: "user", content: [{ type: "text", text: "second" }] }],
+  });
+  await waitForSummary(
+    port,
+    token,
+    "session-1",
+    (value) => value.items.some((item) => item.head === "second"),
+  );
+
+  const response = await fetch(
+    `http://127.0.0.1:${port}/item?sessionID=session-1&itemId=${encodeURIComponent(stale.id)}`,
+    { headers: auth(token) },
+  );
+  expect(response.status).toBe(404);
 });
 
 test("Collector dispose 关闭服务、删除 discovery 文件并释放 hook", async () => {

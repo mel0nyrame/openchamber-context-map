@@ -184,6 +184,11 @@ export function buildDraft(context: SessionContext, collectedAt: string): Snapsh
         return;
       }
       case "compaction": {
+        // 加密摘要没有可读明文，按 0 字符计，避免把元数据算进上下文。
+        if (part.encrypted === true) {
+          add("other", "压缩摘要（加密）", 0, "");
+          return;
+        }
         const text = typeof part.text === "string" ? part.text : "";
         add("other", "压缩摘要", text.length, text);
         return;

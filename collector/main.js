@@ -199,6 +199,10 @@ ${measured.preview}` : name;
         return;
       }
       case "compaction": {
+        if (part.encrypted === true) {
+          add("other", "压缩摘要（加密）", 0, "");
+          return;
+        }
         const text = typeof part.text === "string" ? part.text : "";
         add("other", "压缩摘要", text.length, text);
         return;
@@ -353,12 +357,17 @@ class SnapshotStore {
   #records = new Map;
   #nextId = 1;
   add(draft) {
-    const record = {
-      id: this.#nextId,
-      draft,
-      summary: finalizeSnapshot(draft, null, DEFAULT_WINDOW, true)
-    };
+    const id = this.#nextId;
     this.#nextId += 1;
+    const stamped = {
+      ...draft,
+      items: draft.items.map((item) => ({ ...item, id: `${item.id}@${id}` }))
+    };
+    const record = {
+      id,
+      draft: stamped,
+      summary: finalizeSnapshot(stamped, null, DEFAULT_WINDOW, true)
+    };
     this.#records.delete(draft.sessionID);
     this.#records.set(draft.sessionID, record);
     while (this.#records.size > MAX_SESSIONS) {
