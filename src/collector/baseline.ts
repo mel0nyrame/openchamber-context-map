@@ -77,6 +77,7 @@ export function baselineSummary(
     windowAssumed,
     estimated: true,
     baseline: true,
+    restored: false,
     collectedAt: template.collectedAt,
     categories,
     items: template.items.map(({ id, title, chars, head }) => ({ id, title, chars, head })),
