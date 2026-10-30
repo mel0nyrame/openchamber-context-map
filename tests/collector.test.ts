@@ -291,6 +291,35 @@ test("快照含 media 时整份标 estimated，media 本身不产生字符和 to
   expect(summary.categories.reduce((sum, entry) => sum + entry.tokens, 0)).toBe(500);
 });
 
+test("只有 media 时把 provider Used 记到 other，分类和仍等于 Used", async () => {
+  const { port, token, fake } = await startCollector({
+    models: MODELS,
+    history: { "session-1": [assistantUsage(1000, 200, 30)] },
+  });
+
+  const context = baseContext();
+  context.system = [];
+  context.messages = [
+    {
+      role: "user",
+      content: [
+        {
+          type: "media",
+          filename: "shot.png",
+          media: { source: { type: "base64", data: "x".repeat(100_000) } },
+        },
+      ],
+    },
+  ];
+
+  await fake.fire(context);
+  const summary = await waitForSummary(port, token, "session-1", (value) => value.used === 1230);
+
+  expect(summary.categories.reduce((sum, entry) => sum + entry.tokens, 0)).toBe(1230);
+  expect(categoryOf(summary, "other").tokens).toBe(1230);
+  expect(summary.estimated).toBe(true);
+});
+
 test("模型窗口取不到时使用 200000 并标 assumed window", async () => {
   const { port, token, fake } = await startCollector({
     models: [],

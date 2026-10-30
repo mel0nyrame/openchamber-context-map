@@ -248,7 +248,12 @@ export function finalizeSnapshot(
 ): SnapshotSummary {
   const raw = CATEGORIES.map((category) => Math.ceil((draft.chars[category] ?? 0) / CHARS_PER_TOKEN));
   const rawTotal = raw.reduce((sum, value) => sum + value, 0);
-  const tokens = providerUsed === null ? raw : distribute(raw, providerUsed);
+  const tokens = providerUsed === null
+    ? raw
+    : rawTotal === 0
+      // 全是 media、effort 这类不计字符的内容：把 provider 的用量记到 other，保持分类和等于 Used。
+      ? raw.map((_, index) => (CATEGORIES[index] === "other" ? providerUsed : 0))
+      : distribute(raw, providerUsed);
 
   const categories: CategoryUsage[] = CATEGORIES.map((category, index) => ({
     category,

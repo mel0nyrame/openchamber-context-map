@@ -246,7 +246,7 @@ function distribute(raw, target) {
 function finalizeSnapshot(draft, providerUsed, window, windowAssumed) {
   const raw = CATEGORIES.map((category) => Math.ceil((draft.chars[category] ?? 0) / CHARS_PER_TOKEN));
   const rawTotal = raw.reduce((sum, value) => sum + value, 0);
-  const tokens = providerUsed === null ? raw : distribute(raw, providerUsed);
+  const tokens = providerUsed === null ? raw : rawTotal === 0 ? raw.map((_, index) => CATEGORIES[index] === "other" ? providerUsed : 0) : distribute(raw, providerUsed);
   const categories = CATEGORIES.map((category, index) => ({
     category,
     items: draft.counts[category] ?? 0,
