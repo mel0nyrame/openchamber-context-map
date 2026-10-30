@@ -83,8 +83,11 @@ const collector: CollectorPlugin = {
     }
 
     return async () => {
-      await close(server);
-      await removeDiscovery(discoveryFile);
+      try {
+        await close(server);
+      } finally {
+        await removeDiscovery(discoveryFile);
+      }
     };
   },
 };
