@@ -13,3 +13,9 @@ Issue 与 spec 存放在本仓库的 GitHub Issues（`mel0nyrame/openchamber-con
 ### Domain docs
 
 单上下文：仓库根目录的 `GLOSSARY.md`，ADR 位于 `docs/adr/`。见 `docs/agents/domain.md`。
+
+## 工程约定
+
+- 改 `src/` 后跑 `bun run build`，把三个构建产物一起提交；扩展安装时不执行构建。理由见 `docs/adr/0004-build-artifacts-committed.md`。
+- 交付前 `bun test` 与 `bun run typecheck` 通过。
+- OpenCode V2 插件接口与已核实的事实见 `docs/opencode-plugin.md`。
