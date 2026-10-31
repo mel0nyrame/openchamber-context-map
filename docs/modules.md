@@ -19,6 +19,7 @@ OpenCode 组装请求
     refresh-run.ts             一次刷新的请求与结果映射
     model.ts                   状态、层级、焦点、内容优先级
     view.ts                    DOM 渲染
+    format.ts                  纯格式化与重建签名
 ```
 
 ## Collector（src/collector）
@@ -45,8 +46,9 @@ OpenCode 组装请求
 | 文件 | 主要导出 | 职责 |
 | --- | --- | --- |
 | `src/panel/main.ts` | 无（模块副作用） | 入口接线：`connectHost` → `createPanelModel` → `createRefreshRun` → `createRefreshController` → `createPanelView`；注册 session、lifecycle、ready 回调与页面可见性监听 |
-| `src/panel/model.ts` | `createPanelModel`、`PanelModel`、`PanelState`、`ItemLoadResult` | 面板状态机：placeholder 与 summary 两类 body、内容优先级、钻取层级、焦点、条目加载 |
+| `src/panel/model.ts` | `createPanelModel`、`PanelModel`、`PanelState`、`PanelStatusCopy`、`ItemLoadResult` | 面板状态机：placeholder 与 summary 两类 body、内容优先级、钻取层级、焦点、条目加载 |
 | `src/panel/view.ts` | `createPanelView`、`PanelViewHandle` | 把 model 状态渲染成 DOM，处理键盘、点击与滚动 |
+| `src/panel/format.ts` | `formatNumber`、`formatPercent`、`compactNumber`、`roundPercent`、`pad2`、`versionLabel`、`snapshotSignature`、`breakdownSignature` | 纯格式化与重建签名：数字、百分比、紧凑数字、版本标签，以及地图和明细的签名；不碰 DOM、时间或文案 |
 | `src/panel/refresh.ts` | `createRefreshController`、`busyChanged`、`refreshFailed`、`POLL_INTERVAL_MS`、`FAILURE_LIMIT` | 刷新控制器：busy 时每 2 秒轮询、idle 停表、连续失败 3 次停自动刷新、版本横幅；状态转移是纯函数 |
 | `src/panel/refresh-run.ts` | `createRefreshRun` | 一次刷新的请求构造、超时与结果到 model 的映射 |
 | `src/panel/session.ts` | `applySessionSnapshot` | 把 host 的 session 快照同步给 model 与 controller；只有真正换 session 才请求事件刷新 |
