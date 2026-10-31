@@ -208,7 +208,12 @@ bun run dev:fixture
 ```bash
 bun test
 bun run typecheck
+bun run check:docs
 ```
+
+`bun run check:docs` 在 `src/` 或 `scripts/` 下有文件没有出现在 `docs/modules.md` 时失败；增删模块要同步那张表。
+
+需要真实 OpenCode 与 OpenChamber 的手工验收步骤在 `docs/manual-checklist.md`。
 
 ### 为什么提交构建产物
 
@@ -227,11 +232,14 @@ src/collector/   OpenCode Collector
 src/service/     OpenChamber host Service
 src/panel/       Panel
 src/shared/      Protocol, discovery, version
-scripts/         install, dev, build
-panel/           Panel build output
-service/         Service build output
-collector/       Collector build output
-docs/adr/        架构决策记录（英文，附中文翻译）
+scripts/         install, dev, build, docs check
+tests/           单元测试，按被测模块命名
+panel/           Panel 构建产物
+service/         Service 构建产物
+collector/       Collector 构建产物
+prototype/       临时 UI 原型（见 prototype/README.md）
+docs/modules.md  每个源文件的导出与职责
+docs/adr/        架构决策记录，索引在 docs/adr/README.md
 ```
 
 ## 隐私

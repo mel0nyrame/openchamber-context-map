@@ -8,6 +8,7 @@
     "build": "bun run scripts/build.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "check:docs": "bun run scripts/check-docs.ts",
     "install": "bun run scripts/install.ts",
     "uninstall": "bun run scripts/install.ts --uninstall",
     "dev": "bun run scripts/dev.ts",

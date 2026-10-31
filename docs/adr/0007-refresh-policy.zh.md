@@ -1,5 +1,7 @@
 # 只在 busy 时轮询，失败按来源分层
 
+> 本文记录连续失败后何时停止轮询；每种失败显示什么见 `docs/adr/0008-degradation-layers.zh.md`。
+
 面板不常驻轮询。session busy 时每 2 秒刷新一次，转入 idle 立即停止，切 session 或面板隐藏也停止。用一条 `setTimeout` 链而不是 `setInterval`：上一次请求结束再等 2 秒，请求不会重叠，停止与重置也更简单。
 
 失败分两类。host 或 Service 请求失败计入连续失败，连续 3 次停止自动刷新并显示 banner，手动刷新成功后恢复。Collector 断开不计入：`/health` 仍然成功，只是 `collector.connected` 为 false，面板走「Collector 未连接」状态并继续轮询。把 Collector 断开算作失败，Collector 恢复后就无法自动回到轮询。

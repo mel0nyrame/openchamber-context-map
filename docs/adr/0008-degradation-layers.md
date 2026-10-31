@@ -1,5 +1,7 @@
 # Layer degradation by failure source
 
+> This record covers the message for each failure source. When polling stops after repeated failures is `docs/adr/0007-refresh-policy.md`.
+
 Panel failures are not one kind. Host service unavailable (not installed, not authorized, paused, or the process exited), Collector unavailable (no discovery file, failed probe, version too old), and a single failed request (timeout, parse failure, unexpected status code) come from different layers, and the user can act differently on each. Collapsing them into one "failed to load" message confuses "install the Collector" with "retry in a moment".
 
 A host failure replaces the whole content area and points to Settings → Extensions. Collector states show a placeholder: with no discovery file, it names `~/.config/opencode/plugins/`; with a discovery file but no record, it explains that sending one request is enough. A single failed request is kept silent when data already exists; only after 3 consecutive failures does the refresh policy take over. With no data, the placeholder appears immediately.
