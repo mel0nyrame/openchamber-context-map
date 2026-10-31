@@ -4,7 +4,6 @@ import { applyHostReady, mountBadge, mountBanner, mountButton, mountProgress } f
 import {
   CATEGORIES,
   type Category,
-  type ItemSummary,
   type SnapshotItemDetail,
   type SnapshotSummary,
 } from "../shared/types.ts";
@@ -16,16 +15,12 @@ import {
   resolveLocale,
   t,
   type Locale,
+  type MessageKey,
 } from "./i18n.ts";
 import {
   COMPACT_COLUMNS,
   MAP_COLUMNS,
-  buildBreakdown,
-  categoryOfItem,
-  fitDenominator,
   gradientStops,
-  itemsForCategory,
-  layoutMap,
   windowBar,
   type MapCell,
   type MapLayout,
@@ -33,21 +28,17 @@ import {
 import {
   COLLECTOR_INSTALL_PATH,
   createPanelModel,
+  type ItemLoadResult,
+  type PanelFocus,
   type PanelState,
   type PanelView,
+  type PreviewState,
 } from "./model.ts";
 import { paletteCss } from "./palette.ts";
-import {
-  PREVIEW_MAX_CHARS,
-  clipPreviewText,
-  escapeTarget,
-  focusIndexFor,
-  layerOf,
-  moveFocus,
-  previewTruncated,
-} from "./preview.ts";
+import { PREVIEW_MAX_CHARS, moveFocus } from "./preview.ts";
 import {
   createRefreshController,
+  type RefreshController,
   type RefreshRunContext,
 } from "./refresh.ts";
 
@@ -418,16 +409,21 @@ placeholder.append(placeholderTitle, placeholderDetail, placeholderActions);
 
 root.append(bannerSlot, versionSlot, usage, mapCard, breakdownCard, placeholder);
 
-const model = createPanelModel();
+let refreshController: RefreshController;
+const model = createPanelModel({
+  loadItem: loadItemDetail,
+  onPreviewMissing: () => refreshController.refresh("event"),
+});
 let view: PanelView = model.getView();
-const refreshController = createRefreshController({
+refreshController = createRefreshController({
   visible: document.visibilityState !== "hidden",
   run: (context) => refreshOnce(context),
   onChange: (next) => model.setRefresh(next),
 });
 model.subscribe((next) => {
+  const previous = view;
   view = next;
-  renderView(next);
+  renderView(previous, next);
 });
 
 interface CellTarget {
@@ -435,34 +431,14 @@ interface CellTarget {
   element: HTMLButtonElement;
 }
 
-type ZoomMode = "window" | "fit";
-
-let selectedCategory: Category | null = null;
-let zoom: ZoomMode = "window";
 let currentFreeTokens = 0;
 let mapSignature: string | null = null;
-let currentLayout: MapLayout | null = null;
+let breakdownSignature: string | null = null;
 let cellElements = new Map<number, HTMLButtonElement>();
 let hoveredCell: CellTarget | null = null;
 let pinnedCell: CellTarget | null = null;
 
-interface PreviewState {
-  itemId: string;
-  category: Category;
-  title: string;
-  chars: number;
-  text: string;
-  loading: boolean;
-  error: string | null;
-  truncated: boolean;
-}
-
-let preview: PreviewState | null = null;
-let previewRequest = 0;
-let focusedItemId: string | null = null;
-let focusedItemFallback = 0;
 let itemButtons: HTMLButtonElement[] = [];
-let notice: string | null = null;
 let copyTimer: number | null = null;
 
 document.addEventListener("pointerdown", (event) => {
@@ -477,7 +453,7 @@ document.addEventListener("keydown", (event) => {
     pinnedCell = null;
     hoveredCell = null;
     refreshTooltip();
-    if (preview || selectedCategory) goBack();
+    if (view.preview !== null || view.selectedCategory !== null) goBack();
     return;
   }
 
@@ -498,7 +474,7 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
-  if (preview || event.defaultPrevented) return;
+  if (view.preview !== null || event.defaultPrevented) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   const target = event.target;
   if (
@@ -513,7 +489,7 @@ document.addEventListener("keydown", (event) => {
   const delta = key === "arrowdown" || key === "j" ? 1 : key === "arrowup" || key === "k" ? -1 : 0;
   if (delta === 0) return;
 
-  if (!selectedCategory) {
+  if (view.selectedCategory === null) {
     // 分类列表：焦点在分类行上时，方向键在行之间移动；Enter 由按钮自己处理。
     const row = document.activeElement;
     if (!(row instanceof HTMLButtonElement) || !row.matches("button.row[data-category]")) return;
@@ -527,16 +503,17 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
-  const items = currentItems();
+  const items = view.items;
   if (items.length === 0) return;
   const activeIndex = itemButtons.indexOf(document.activeElement as HTMLButtonElement);
   const currentIndex = activeIndex >= 0
     ? activeIndex
-    : itemButtons.findIndex((button) => button.dataset.itemId === focusedItemId);
+    : itemButtons.findIndex((button) => button.dataset.itemId === view.focus.itemId);
   const next = moveFocus(currentIndex, items.length, delta);
   if (next < 0) return;
   event.preventDefault();
-  focusItemAt(next);
+  model.focusItemAt(next);
+  itemButtons[next]?.focus();
 });
 
 window.addEventListener("scroll", () => {
@@ -553,16 +530,19 @@ window.addEventListener("resize", () => {
   refreshTooltip();
 });
 
-renderView(view);
+renderView(null, view);
 model.setRefresh(refreshController.getView());
 
 function versionLabel(version: string): string {
   return version.startsWith("v") ? version : `v${version}`;
 }
 
-function renderView(next: PanelView): void {
+function renderView(previous: PanelView | null, next: PanelView): void {
   renderStatus(next.status);
   renderContent(next);
+  if (next.body.kind === "summary") renderBreakdown(previous, next);
+  syncCopyTimer(next);
+  applyFocusTransition(previous, next);
   syncRetryControls();
 }
 
@@ -631,6 +611,7 @@ function renderStaticCopy(): void {
   renderRefreshBanner();
   renderStatus(view.status);
   mapSignature = null;
+  breakdownSignature = null;
 }
 
 function failureOf(error: unknown): HostFailureCopy {
@@ -680,14 +661,10 @@ function showPlaceholder(headline: string, detail: string, retry = false): void 
   mapCard.hidden = true;
   breakdownCard.hidden = true;
   mapSignature = null;
+  breakdownSignature = null;
   hoveredCell = null;
   pinnedCell = null;
-  preview = null;
-  previewRequest += 1;
-  focusedItemId = null;
-  focusedItemFallback = 0;
   itemButtons = [];
-  notice = null;
   resetCopyFeedback();
   hideTooltip();
   breakdownBody.replaceChildren();
@@ -703,7 +680,7 @@ function renderContent(next: PanelView): void {
   renderVersionBanner();
   const body = next.body;
   if (body.kind === "summary") {
-    renderSummary(body.summary);
+    renderSummary(body.summary, next);
     return;
   }
   showPlaceholder(
@@ -777,7 +754,7 @@ function renderUpdated(next: SnapshotSummary | null): void {
   });
 }
 
-function snapshotSignature(next: SnapshotSummary): string {
+function snapshotSignature(next: SnapshotSummary, zoom: PanelView["zoom"]): string {
   return [
     next.sessionID,
     next.collectedAt,
@@ -797,30 +774,18 @@ function compactNumber(value: number): string {
   return `${scaled.toFixed(digits).replace(/\.0$/, "")}k`;
 }
 
-function mapDenominator(next: SnapshotSummary): number {
-  const fit = Math.min(
-    next.window > 0 ? next.window : Number.POSITIVE_INFINITY,
-    fitDenominator(next.used),
-  );
-  return Math.max(1, zoom === "window" ? next.window : fit);
-}
-
-function renderZoomLabel(next: SnapshotSummary): void {
-  const value = compactNumber(zoom === "window" ? next.window : mapDenominator(next));
+function renderZoomLabel(layout: MapLayout): void {
+  const value = compactNumber(layout.denominator);
   zoomButton.textContent = t(
     currentLocale,
-    zoom === "window" ? "zoomWindow" : "zoomFit",
+    view.zoom === "window" ? "zoomWindow" : "zoomFit",
     { value },
   );
   zoomButton.title = t(currentLocale, "zoomTitle");
 }
 
 function toggleZoom(): void {
-  zoom = zoom === "window" ? "fit" : "window";
-  const current = view.summary;
-  if (!current) return;
-  mapSignature = null;
-  renderSummary(current);
+  model.setZoom(view.zoom === "window" ? "fit" : "window");
 }
 
 function roundPercent(value: number): string {
@@ -850,11 +815,9 @@ function cellLabel(cell: MapCell): string {
     .join(t(currentLocale, "listSeparator"));
 }
 
-function renderMap(next: SnapshotSummary): void {
-  renderZoomLabel(next);
-  const denominator = mapDenominator(next);
-  const layout = layoutMap(next.categories, denominator);
-  currentLayout = layout;
+function renderMap(next: SnapshotSummary, layout: MapLayout): void {
+  renderZoomLabel(layout);
+  const denominator = layout.denominator;
   currentFreeTokens = Math.max(0, denominator - next.used);
   freeLegendText.textContent = t(currentLocale, "freeLegend", {
     value: compactNumber(currentFreeTokens),
@@ -895,7 +858,7 @@ function renderMap(next: SnapshotSummary): void {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       if (cell.free) {
-        selectCategory(null);
+        model.selectCategory(null);
         return;
       }
       pinnedCell = pinnedCell?.element === button ? null : { cell, element: button };
@@ -989,23 +952,19 @@ function hideTooltip(): void {
   }
 }
 
-function currentItems(): ItemSummary[] {
-  const current = view.summary;
-  if (!current || !selectedCategory) return [];
-  return itemsForCategory(current.items, selectedCategory);
+function focusItemButton(focus: PanelFocus): void {
+  const byId = focus.itemId === null
+    ? -1
+    : itemButtons.findIndex((button) => button.dataset.itemId === focus.itemId);
+  const index = byId >= 0 ? byId : focus.fallback;
+  const target = itemButtons[index] ?? itemButtons[0];
+  if (target) target.focus();
+  else backButton.focus();
 }
 
-function focusItemAt(index: number): void {
-  const button = itemButtons[index];
-  if (!button) return;
-  button.focus();
-  focusedItemId = button.dataset.itemId ?? null;
-  focusedItemFallback = index;
-}
-
-function focusItemById(itemId: string | null, fallback = 0): void {
-  const index = focusIndexFor(currentItems(), itemId, fallback);
-  if (index >= 0) focusItemAt(index);
+function focusFirstItemOrBack(): void {
+  if (view.layer === "items" && view.items.length > 0) focusItemButton(view.focus);
+  else backButton.focus();
 }
 
 function focusCategoryRow(category: Category): void {
@@ -1017,69 +976,53 @@ function focusCategoryRow(category: Category): void {
   }
 }
 
+function clearCopyTimer(): void {
+  if (copyTimer === null) return;
+  window.clearTimeout(copyTimer);
+  copyTimer = null;
+}
+
 function resetCopyFeedback(): void {
-  if (copyTimer !== null) {
-    window.clearTimeout(copyTimer);
-    copyTimer = null;
-  }
+  clearCopyTimer();
   previewCopy.textContent = t(currentLocale, "previewCopy");
   previewStatus.textContent = "";
   previewStatus.dataset.tone = "";
 }
 
-function selectCategory(category: Category | null): void {
-  selectedCategory = category;
-  preview = null;
-  previewRequest += 1;
-  focusedItemId = null;
-  focusedItemFallback = 0;
-  notice = null;
-  resetCopyFeedback();
-  hoveredCell = null;
-  pinnedCell = null;
-  refreshTooltip();
-  applySelection();
-  renderBreakdown();
-  if (category) {
-    if (currentItems().length > 0) focusItemAt(0);
-    else backButton.focus();
-  }
+function scheduleCopyClear(): void {
+  clearCopyTimer();
+  copyTimer = window.setTimeout(() => {
+    copyTimer = null;
+    if (model.getView().notice === "previewCopied") model.setNotice(null);
+  }, 1_500);
 }
 
-function closePreview(): void {
-  if (!preview) return;
-  const category = selectedCategory;
-  preview = null;
-  previewRequest += 1;
-  resetCopyFeedback();
-  renderBreakdown();
-  if (category && currentItems().length > 0) {
-    focusItemById(focusedItemId, focusedItemFallback);
+function syncCopyTimer(next: PanelView): void {
+  if (next.notice !== "previewCopied") {
+    clearCopyTimer();
     return;
   }
-  if (category) {
-    selectCategory(null);
-    focusCategoryRow(category);
-  }
+  if (copyTimer === null) scheduleCopyClear();
 }
 
 function goBack(): void {
-  const layer = layerOf(selectedCategory, preview?.itemId ?? null);
-  if (layer === "overview") return;
-  if (escapeTarget(layer) === "items") {
-    closePreview();
-    return;
+  const previousCategory = view.selectedCategory;
+  const previousLayer = view.layer;
+  if (previousLayer === "overview") return;
+  model.goBack();
+  if (
+    previousLayer === "items"
+    && model.getView().layer === "overview"
+    && previousCategory !== null
+  ) {
+    focusCategoryRow(previousCategory);
   }
-  const previous = selectedCategory;
-  if (!previous) return;
-  selectCategory(null);
-  focusCategoryRow(previous);
 }
 
-function applySelection(): void {
-  const selected = selectedCategory;
-  const activeCells = selected && currentLayout
-    ? new Set(currentLayout.cellsByCategory[selected])
+function applySelection(current: PanelView): void {
+  const selected = current.selectedCategory;
+  const activeCells = selected !== null && current.layout !== null
+    ? new Set(current.layout.cellsByCategory[selected])
     : null;
   for (const [index, element] of cellElements) {
     const active = activeCells?.has(index) === true;
@@ -1088,40 +1031,105 @@ function applySelection(): void {
   }
 }
 
-function renderBreakdown(): void {
+function applyFocusTransition(previous: PanelView | null, next: PanelView): void {
+  if (previous === null || next.body.kind !== "summary") return;
+  if (previous.preview !== null && next.preview === null) {
+    if (next.layer === "items") {
+      focusItemButton(next.focus);
+      return;
+    }
+    if (next.layer === "overview" && previous.selectedCategory !== null) {
+      focusCategoryRow(previous.selectedCategory);
+      return;
+    }
+  }
+  if (previous.layer === "overview" && next.layer === "items" && next.preview === null) {
+    focusFirstItemOrBack();
+  }
+}
+
+function breakdownSignatureFor(current: PanelView): string {
+  const preview = current.preview;
+  if (preview !== null) {
+    return [
+      "preview",
+      preview.itemId,
+      preview.category,
+      preview.title,
+      preview.chars,
+      preview.text,
+      preview.loading,
+      preview.error ?? "",
+      preview.truncated,
+      current.notice ?? "",
+    ].join("|");
+  }
+  const summary = current.summary;
+  return [
+    "list",
+    summary?.sessionID ?? "",
+    summary?.collectedAt ?? "",
+    summary?.used ?? 0,
+    summary?.window ?? 0,
+    summary?.categories.map((entry) => `${entry.category}:${entry.items}:${entry.tokens}`).join(",") ?? "",
+    summary?.items.map((entry) => `${entry.id}:${entry.title}:${entry.chars}`).join(",") ?? "",
+    current.selectedCategory ?? "",
+    current.layer,
+    current.notice ?? "",
+  ].join("|");
+}
+
+function renderBreakdown(previous: PanelView | null, next: PanelView): void {
+  if (next.body.kind !== "summary" || next.summary === null) {
+    backButton.hidden = true;
+    return;
+  }
+  const signature = breakdownSignatureFor(next);
+  if (signature === breakdownSignature) return;
+  breakdownSignature = signature;
+
   const active = document.activeElement;
   const activeElement = active instanceof HTMLElement && breakdownBody.contains(active) ? active : null;
   const activeItemId = activeElement?.dataset.itemId ?? null;
   const activeCategory = activeElement?.dataset.category ?? null;
+  const activePreview = active === previewCopy
+    ? previewCopy
+    : active === previewBody
+      ? previewBody
+      : active === previewPanel
+        ? previewPanel
+        : null;
 
   breakdownBody.replaceChildren();
   itemButtons = [];
-  const current = view.summary;
-  if (!current || !currentLayout) {
-    backButton.hidden = true;
+  const current = next.summary;
+  backButton.hidden = next.selectedCategory === null && next.preview === null;
+
+  if (next.preview !== null) {
+    renderPreview(next.preview, next.notice);
+    if (activePreview !== null) activePreview.focus();
+    else if (
+      previous === null
+      || previous.preview === null
+      || previous.preview.itemId !== next.preview.itemId
+    ) {
+      previewPanel.focus();
+    }
     return;
   }
-  const breakdown = buildBreakdown(current.categories, current.used, current.window);
-  backButton.hidden = !selectedCategory && !preview;
 
-  if (preview) {
-    renderPreview(preview);
-    previewPanel.focus();
-    return;
-  }
-
-  if (notice) {
+  if (next.notice !== null) {
     const note = document.createElement("div");
     note.className = "notice";
     note.setAttribute("role", "status");
-    note.textContent = notice;
+    note.textContent = t(currentLocale, next.notice);
     breakdownBody.append(note);
   }
 
-  if (selectedCategory) {
-    const category = selectedCategory;
-    const row = breakdown.rows.find((entry) => entry.category === category);
-    const items = itemsForCategory(current.items, category);
+  if (next.selectedCategory !== null) {
+    const category = next.selectedCategory;
+    const row = next.breakdown?.rows.find((entry) => entry.category === category);
+    const items = next.items;
 
     const drill = document.createElement("div");
     drill.className = "drill-head";
@@ -1167,23 +1175,24 @@ function renderBreakdown(): void {
         chars: formatNumber(entry.chars),
       });
       itemRow.append(itemTitle, itemMeta);
-      itemRow.addEventListener("click", () => { void openPreview(entry); });
+      itemRow.addEventListener("click", () => { void model.openItem(entry.id); });
       itemRow.addEventListener("focus", () => {
-        focusedItemId = entry.id;
-        focusedItemFallback = index;
+        model.focusItemById(entry.id, index);
       });
       itemButtons.push(itemRow);
       breakdownBody.append(itemRow);
     }
 
-    if (activeItemId) focusItemById(activeItemId, focusedItemFallback);
+    if (activeItemId !== null) {
+      focusItemButton({ itemId: activeItemId, fallback: next.focus.fallback });
+    }
     return;
   }
 
   backButton.hidden = true;
   const list = document.createElement("div");
   list.className = "breakdown-list";
-  for (const entry of breakdown.rows) {
+  for (const entry of next.breakdown?.rows ?? []) {
     const row = document.createElement("button");
     row.type = "button";
     row.className = "row";
@@ -1201,7 +1210,7 @@ function renderBreakdown(): void {
       tokens: formatNumber(entry.tokens),
     });
     row.append(swatch, name, meta);
-    row.addEventListener("click", () => selectCategory(entry.category));
+    row.addEventListener("click", () => model.selectCategory(entry.category));
     list.append(row);
   }
 
@@ -1228,7 +1237,7 @@ function renderBreakdown(): void {
   if (knownCategory) focusCategoryRow(knownCategory);
 }
 
-function renderPreview(state: PreviewState): void {
+function renderPreview(state: PreviewState, notice: PanelView["notice"]): void {
   previewTitle.textContent = state.title || t(currentLocale, "unnamedItem");
   const suffix = state.truncated
     ? t(currentLocale, "previewTruncated", { chars: formatNumber(PREVIEW_MAX_CHARS) })
@@ -1238,12 +1247,20 @@ function renderPreview(state: PreviewState): void {
   previewBody.textContent = state.text;
   previewBody.hidden = state.loading || state.error !== null;
   previewCopy.disabled = state.loading || state.error !== null;
-  previewCopy.textContent = t(currentLocale, "previewCopy");
+  previewCopy.textContent = notice === "previewCopied"
+    ? t(currentLocale, "previewCopiedButton")
+    : t(currentLocale, "previewCopy");
   if (state.loading) {
     previewStatus.textContent = t(currentLocale, "previewLoading");
     previewStatus.dataset.tone = "";
-  } else if (state.error) {
-    previewStatus.textContent = state.error;
+  } else if (state.error !== null) {
+    previewStatus.textContent = t(currentLocale, state.error);
+    previewStatus.dataset.tone = "error";
+  } else if (notice === "previewCopied") {
+    previewStatus.textContent = t(currentLocale, "previewCopied");
+    previewStatus.dataset.tone = "ok";
+  } else if (notice === "previewCopyFailed") {
+    previewStatus.textContent = t(currentLocale, "previewCopyFailed");
     previewStatus.dataset.tone = "error";
   } else {
     previewStatus.textContent = "";
@@ -1252,108 +1269,11 @@ function renderPreview(state: PreviewState): void {
   breakdownBody.append(previewPanel);
 }
 
-async function openPreview(entry: ItemSummary): Promise<void> {
-  const category = categoryOfItem(entry.id) ?? selectedCategory;
-  const currentSessionID = view.sessionID;
-  if (!category || currentSessionID === null) return;
-
-  const request = ++previewRequest;
-  focusedItemId = entry.id;
-  const index = itemButtons.findIndex((button) => button.dataset.itemId === entry.id);
-  if (index >= 0) focusedItemFallback = index;
-  notice = null;
-  preview = {
-    itemId: entry.id,
-    category,
-    title: entry.title,
-    chars: entry.chars,
-    text: "",
-    loading: true,
-    error: null,
-    truncated: false,
-  };
-  renderBreakdown();
-
-  try {
-    const result = await host.serviceRequest({
-      method: "GET",
-      path: "/item",
-      query: { sessionID: currentSessionID, itemId: entry.id },
-    });
-    if (request !== previewRequest || preview?.itemId !== entry.id) return;
-    if (view.sessionID !== currentSessionID) return;
-
-    if (result.status === 404) {
-      if (view.summary?.restored) {
-        // 恢复的快照只有骨架；刷新也只会拿回同一份，直接说明原因。
-        preview = {
-          ...preview,
-          loading: false,
-          error: t(currentLocale, "previewRestoredUnavailable"),
-        };
-        renderBreakdown();
-        return;
-      }
-      handlePreviewMissing(request);
-      return;
-    }
-    if (result.status !== 200) {
-      preview = {
-        ...preview,
-        loading: false,
-        error: t(currentLocale, "previewReadError"),
-      };
-      renderBreakdown();
-      return;
-    }
-
-    const detail = parseItemDetail(result.body);
-    if (!detail) {
-      preview = { ...preview, loading: false, error: t(currentLocale, "previewBadFormat") };
-      renderBreakdown();
-      return;
-    }
-
-    const text = clipPreviewText(detail.text);
-    preview = {
-      itemId: entry.id,
-      category,
-      title: detail.title || entry.title,
-      chars: detail.chars,
-      text,
-      loading: false,
-      error: null,
-      truncated: previewTruncated(detail.chars, text.length),
-    };
-    renderBreakdown();
-  } catch {
-    if (request !== previewRequest || preview?.itemId !== entry.id) return;
-    preview = {
-      ...preview,
-      loading: false,
-      error: t(currentLocale, "previewReadError"),
-    };
-    renderBreakdown();
-  }
-}
-
-function handlePreviewMissing(request: number): void {
-  if (request !== previewRequest) return;
-  preview = null;
-  previewRequest += 1;
-  notice = t(currentLocale, "previewMissingNotice");
-  resetCopyFeedback();
-  const fallback = focusedItemFallback;
-  renderBreakdown();
-  if (selectedCategory) focusItemById(focusedItemId, fallback);
-
-  refreshController.refresh("event");
-}
-
 async function copyPreview(): Promise<void> {
-  if (!preview || preview.loading || preview.error !== null) return;
-  const itemId = preview.itemId;
-  const text = preview.text;
+  const current = view.preview;
+  if (!current || current.loading || current.error !== null) return;
+  const itemId = current.itemId;
+  const text = current.text;
   let copied = false;
 
   try {
@@ -1365,22 +1285,15 @@ async function copyPreview(): Promise<void> {
     copied = false;
   }
   if (!copied) copied = copyWithExecCommand(text);
-  if (preview?.itemId !== itemId) return;
+  if (view.preview?.itemId !== itemId) return;
 
   if (copied) {
-    previewStatus.textContent = t(currentLocale, "previewCopied");
-    previewStatus.dataset.tone = "ok";
-    previewCopy.textContent = t(currentLocale, "previewCopiedButton");
-    if (copyTimer !== null) window.clearTimeout(copyTimer);
-    copyTimer = window.setTimeout(() => {
-      previewCopy.textContent = t(currentLocale, "previewCopy");
-      copyTimer = null;
-    }, 1_500);
+    model.setNotice("previewCopied");
+    scheduleCopyClear();
     return;
   }
 
-  previewStatus.textContent = t(currentLocale, "previewCopyFailed");
-  previewStatus.dataset.tone = "error";
+  model.setNotice("previewCopyFailed");
 }
 
 function copyWithExecCommand(text: string): boolean {
@@ -1412,7 +1325,23 @@ function parseItemDetail(body: string): SnapshotItemDetail | null {
   }
 }
 
-function renderSummary(next: SnapshotSummary): void {
+async function loadItemDetail(sessionID: string, itemId: string): Promise<ItemLoadResult> {
+  try {
+    const result = await host.serviceRequest({
+      method: "GET",
+      path: "/item",
+      query: { sessionID, itemId },
+    });
+    if (result.status === 404) return { kind: "missing" };
+    if (result.status !== 200) return { kind: "read-error" };
+    const detail = parseItemDetail(result.body);
+    return detail === null ? { kind: "bad-format" } : { kind: "ok", detail };
+  } catch {
+    return { kind: "read-error" };
+  }
+}
+
+function renderSummary(next: SnapshotSummary, current: PanelView): void {
   placeholder.hidden = true;
   usage.hidden = false;
   usageModel.hidden = false;
@@ -1439,19 +1368,12 @@ function renderSummary(next: SnapshotSummary): void {
   baselineSlot.hidden = !next.baseline;
   usageBadges.hidden = !(next.estimated || next.windowAssumed || next.baseline);
 
-  const signature = snapshotSignature(next);
-  if (signature === mapSignature) return;
-  mapSignature = signature;
-  renderMap(next);
-  if (
-    !preview
-    && selectedCategory
-    && (!currentLayout || currentLayout.cellsByCategory[selectedCategory].length === 0)
-  ) {
-    selectedCategory = null;
+  const signature = snapshotSignature(next, current.zoom);
+  if (signature !== mapSignature) {
+    mapSignature = signature;
+    if (current.layout !== null) renderMap(next, current.layout);
   }
-  if (!preview) renderBreakdown();
-  applySelection();
+  applySelection(current);
 }
 
 function parseSummary(body: string): SnapshotSummary | null {
@@ -1469,18 +1391,13 @@ function applySession(next: SessionSnapshot | null): void {
 
   if (nextID !== previous) {
     // 旧 session 的数据先清掉，再让控制器作废旧请求并决定是否拉新的一份。
-    selectedCategory = null;
     mapSignature = null;
-    currentLayout = null;
+    breakdownSignature = null;
+    currentFreeTokens = 0;
     cellElements.clear();
     hoveredCell = null;
     pinnedCell = null;
-    preview = null;
-    previewRequest += 1;
-    focusedItemId = null;
-    focusedItemFallback = 0;
     itemButtons = [];
-    notice = null;
     resetCopyFeedback();
     breakdownBody.replaceChildren();
     hideTooltip();
