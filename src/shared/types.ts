@@ -39,6 +39,8 @@ export interface SnapshotSummary {
   estimated: boolean;
   /** 该 session 尚无真实快照，内容取自最近一次请求的 system + 工具定义模板。 */
   baseline: boolean;
+  /** 从磁盘读回的上一份快照，不是本次进程采集的。 */
+  restored: boolean;
   collectedAt: string;
   categories: CategoryUsage[];
   items: ItemSummary[];

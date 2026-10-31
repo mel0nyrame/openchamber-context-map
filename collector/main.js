@@ -293,6 +293,7 @@ function finalizeSnapshot(draft, providerUsed, window, windowAssumed) {
     windowAssumed,
     estimated: providerUsed === null || draft.hasMedia || rawTotal === 0,
     baseline: false,
+    restored: false,
     collectedAt: draft.collectedAt,
     categories,
     items: draft.items.map(({ id, title, chars, head }) => ({ id, title, chars, head }))
@@ -352,6 +353,7 @@ function baselineSummary(template, sessionID, window, windowAssumed) {
     windowAssumed,
     estimated: true,
     baseline: true,
+    restored: false,
     collectedAt: template.collectedAt,
     categories,
     items: template.items.map(({ id, title, chars, head }) => ({ id, title, chars, head }))
@@ -435,11 +437,180 @@ class WindowResolver {
 }
 async function enrichSnapshot(context, store, windows, record) {
   const { draft, id } = record;
+  if (!draft)
+    return;
   const [used, window] = await Promise.all([
     readProviderUsed(context, draft.sessionID).catch(() => null),
     windows.resolve(draft.modelRef).catch(() => ({ window: DEFAULT_WINDOW, assumed: true }))
   ]);
-  store.replace(draft.sessionID, id, finalizeSnapshot(draft, used, window.window, window.assumed));
+  return store.replace(draft.sessionID, id, finalizeSnapshot(draft, used, window.window, window.assumed));
+}
+
+// src/collector/persist.ts
+import { chmod as chmod2, mkdir as mkdir2, readdir as readdir2, readFile as readFile2, rename as rename2, rm as rm2, stat, writeFile as writeFile2 } from "node:fs/promises";
+import { homedir as homedir2 } from "node:os";
+import { join as join2 } from "node:path";
+var SNAPSHOT_SCHEMA_VERSION = 1;
+var MAX_SNAPSHOTS = 20;
+var MAX_SNAPSHOT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+var SNAPSHOT_WRITE_DELAY_MS = 300;
+var PERSIST_ENV = "CONTEXT_MAP_PERSIST";
+var SNAPSHOT_DIR_ENV = "CONTEXT_MAP_SNAPSHOT_DIR";
+function persistenceEnabled(env = process.env) {
+  const value = env[PERSIST_ENV]?.trim().toLowerCase();
+  return value !== "0" && value !== "false" && value !== "off";
+}
+function resolveSnapshotDir(env = process.env) {
+  const override = env[SNAPSHOT_DIR_ENV]?.trim();
+  if (override)
+    return override;
+  const discovery = env[DISCOVERY_DIR_ENV]?.trim();
+  if (discovery)
+    return join2(discovery, "snapshots");
+  return join2(homedir2(), ".local", "state", "openchamber-context-map", "snapshots");
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+function isItemSummary(value) {
+  if (!isRecord(value))
+    return false;
+  return typeof value.id === "string" && typeof value.title === "string" && isFiniteNumber(value.chars) && typeof value.head === "string";
+}
+function isCategoryUsage(value) {
+  if (!isRecord(value))
+    return false;
+  return typeof value.category === "string" && CATEGORIES.includes(value.category) && isFiniteNumber(value.items) && isFiniteNumber(value.chars) && isFiniteNumber(value.tokens);
+}
+function isSnapshotSummary(value) {
+  if (!isRecord(value))
+    return false;
+  return typeof value.sessionID === "string" && value.sessionID.length > 0 && typeof value.model === "string" && isFiniteNumber(value.used) && isFiniteNumber(value.window) && typeof value.windowAssumed === "boolean" && typeof value.estimated === "boolean" && typeof value.baseline === "boolean" && typeof value.collectedAt === "string" && Number.isFinite(Date.parse(value.collectedAt)) && Array.isArray(value.categories) && value.categories.length === CATEGORIES.length && value.categories.every(isCategoryUsage) && Array.isArray(value.items) && value.items.every(isItemSummary);
+}
+function snapshotFileName(sessionID) {
+  return `${sessionID.replace(/[^A-Za-z0-9._-]/g, "_")}.json`;
+}
+async function readSnapshotFile(file) {
+  try {
+    const value = JSON.parse(await readFile2(file, "utf8"));
+    if (!isRecord(value) || value.schemaVersion !== SNAPSHOT_SCHEMA_VERSION)
+      return null;
+    return isSnapshotSummary(value.summary) ? value.summary : null;
+  } catch {
+    return null;
+  }
+}
+async function readSnapshots(dir, now = Date.now()) {
+  let names;
+  try {
+    names = await readdir2(dir);
+  } catch {
+    return [];
+  }
+  const kept = [];
+  for (const name of names) {
+    if (!name.endsWith(".json"))
+      continue;
+    const file = join2(dir, name);
+    const summary = await readSnapshotFile(file);
+    if (!summary || now - Date.parse(summary.collectedAt) > MAX_SNAPSHOT_AGE_MS) {
+      await rm2(file, { force: true });
+      continue;
+    }
+    kept.push({ summary, file });
+  }
+  kept.sort((a, b) => Date.parse(b.summary.collectedAt) - Date.parse(a.summary.collectedAt));
+  for (const extra of kept.slice(MAX_SNAPSHOTS)) {
+    await rm2(extra.file, { force: true });
+  }
+  return kept.slice(0, MAX_SNAPSHOTS).map((entry) => entry.summary);
+}
+var tempSequence2 = 0;
+async function writeSnapshot(dir, summary) {
+  await mkdir2(dir, { recursive: true, mode: 448 });
+  await chmod2(dir, 448);
+  const file = join2(dir, snapshotFileName(summary.sessionID));
+  const body = JSON.stringify({ schemaVersion: SNAPSHOT_SCHEMA_VERSION, summary });
+  tempSequence2 += 1;
+  const temp = `${file}.${process.pid}.${tempSequence2}.tmp`;
+  try {
+    await writeFile2(temp, body, { mode: 384 });
+    await chmod2(temp, 384);
+    await rename2(temp, file);
+  } catch (error) {
+    await rm2(temp, { force: true });
+    throw error;
+  }
+}
+async function pruneSnapshots(dir) {
+  let names;
+  try {
+    names = await readdir2(dir);
+  } catch {
+    return;
+  }
+  const files = [];
+  for (const name of names) {
+    if (!name.endsWith(".json"))
+      continue;
+    const file = join2(dir, name);
+    try {
+      const info = await stat(file);
+      files.push({ file, mtime: info.mtimeMs });
+    } catch {}
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+  for (const extra of files.slice(MAX_SNAPSHOTS)) {
+    await rm2(extra.file, { force: true });
+  }
+}
+
+class SnapshotWriter {
+  dir;
+  #timers = new Map;
+  #pending = new Map;
+  constructor(dir) {
+    this.dir = dir;
+  }
+  schedule(summary) {
+    if (!this.dir)
+      return;
+    this.#pending.set(summary.sessionID, summary);
+    const existing = this.#timers.get(summary.sessionID);
+    if (existing)
+      clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.#flushOne(summary.sessionID);
+    }, SNAPSHOT_WRITE_DELAY_MS);
+    timer.unref?.();
+    this.#timers.set(summary.sessionID, timer);
+  }
+  async flush() {
+    await Promise.all([...this.#pending.keys()].map((sessionID) => this.#flushOne(sessionID)));
+  }
+  async dispose() {
+    for (const timer of this.#timers.values())
+      clearTimeout(timer);
+    this.#timers.clear();
+    await this.flush();
+  }
+  async#flushOne(sessionID) {
+    const timer = this.#timers.get(sessionID);
+    if (timer)
+      clearTimeout(timer);
+    this.#timers.delete(sessionID);
+    const summary = this.#pending.get(sessionID);
+    this.#pending.delete(sessionID);
+    if (!this.dir || !summary)
+      return;
+    try {
+      await writeSnapshot(this.dir, summary);
+      await pruneSnapshots(this.dir);
+    } catch {}
+  }
 }
 
 // src/collector/store.ts
@@ -462,12 +633,20 @@ class SnapshotStore {
     };
     this.#records.delete(draft.sessionID);
     this.#records.set(draft.sessionID, record);
-    while (this.#records.size > MAX_SESSIONS) {
-      const oldest = this.#records.keys().next();
-      if (oldest.done)
-        break;
-      this.#records.delete(oldest.value);
-    }
+    this.#trim();
+    return record;
+  }
+  restore(summary) {
+    const id = this.#nextId;
+    this.#nextId += 1;
+    const record = {
+      id,
+      draft: null,
+      summary: { ...summary, restored: true }
+    };
+    this.#records.delete(summary.sessionID);
+    this.#records.set(summary.sessionID, record);
+    this.#trim();
     return record;
   }
   get(sessionID) {
@@ -478,9 +657,18 @@ class SnapshotStore {
     if (!current || current.id !== id)
       return;
     this.#records.set(sessionID, { ...current, summary });
+    return summary;
   }
   get size() {
     return this.#records.size;
+  }
+  #trim() {
+    while (this.#records.size > MAX_SESSIONS) {
+      const oldest = this.#records.keys().next();
+      if (oldest.done)
+        break;
+      this.#records.delete(oldest.value);
+    }
   }
 }
 
@@ -520,13 +708,23 @@ var collector = {
     const store = new SnapshotStore;
     const baselines = new BaselineStore;
     const windows = new WindowResolver(context);
+    const persistDir = persistenceEnabled() ? resolveSnapshotDir() : null;
+    const writer = new SnapshotWriter(persistDir);
+    if (persistDir) {
+      for (const summary of await readSnapshots(persistDir).catch(() => [])) {
+        store.restore(summary);
+      }
+    }
     const hook = context.session?.hook ? await context.session.hook("context", (sessionContext) => {
       const draft = buildDraft(sessionContext, new Date().toISOString());
       if (typeof sessionContext.agent === "string" && sessionContext.agent) {
         baselines.remember(sessionContext.agent, baselineDraft(draft));
       }
       const record = store.add(draft);
-      enrichSnapshot(context, store, windows, record).catch(() => {});
+      enrichSnapshot(context, store, windows, record).then((summary) => {
+        if (summary)
+          writer.schedule(summary);
+      }).catch(() => {});
     }) : null;
     const resolveBaselineTemplate = async (sessionID) => {
       const get = context.session?.get;
@@ -583,7 +781,7 @@ var collector = {
             sendJson(response, 200, baselineSummary(template, sessionID, resolved.window, resolved.assumed));
             return;
           }
-          const items = record ? record.draft.items : (await resolveBaselineTemplate(sessionID))?.items;
+          const items = record ? record.draft?.items : (await resolveBaselineTemplate(sessionID))?.items;
           const item = items?.find((candidate) => candidate.id === itemId);
           if (!item) {
             sendJson(response, 404, { error: "not_found" });
@@ -636,7 +834,11 @@ var collector = {
         try {
           await close(server);
         } finally {
-          await removeDiscovery(discoveryFile);
+          try {
+            await writer.dispose();
+          } finally {
+            await removeDiscovery(discoveryFile);
+          }
         }
       }
     };

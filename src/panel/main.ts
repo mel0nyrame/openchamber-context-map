@@ -800,7 +800,9 @@ function renderUpdated(): void {
   const date = new Date(collectedAt);
   if (Number.isNaN(date.getTime())) {
     updated.hidden = false;
-    updated.textContent = t(currentLocale, "updatedToday", { clock: collectedAt });
+    updated.textContent = summary?.restored
+      ? `${collectedAt}${t(currentLocale, "restoredSuffix")}`
+      : collectedAt;
     updated.title = collectedAt;
     return;
   }
@@ -811,13 +813,16 @@ function renderUpdated(): void {
     && date.getDate() === today.getDate();
   const clock = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
   updated.hidden = false;
-  updated.textContent = sameDay
+  const label = sameDay
     ? t(currentLocale, "updatedToday", { clock })
     : t(currentLocale, "updatedOtherDay", {
       month: date.getMonth() + 1,
       day: date.getDate(),
       clock,
     });
+  updated.textContent = summary?.restored
+    ? `${label}${t(currentLocale, "restoredSuffix")}`
+    : label;
   updated.title = t(currentLocale, "collectedAtTitle", {
     date: date.toLocaleString(currentLocale === "zh" ? "zh-CN" : "en-US", { hour12: false }),
   });
@@ -1326,6 +1331,16 @@ async function openPreview(entry: ItemSummary): Promise<void> {
     if (session?.id !== current.id) return;
 
     if (result.status === 404) {
+      if (summary?.restored) {
+        // 恢复的快照只有骨架；刷新也只会拿回同一份，直接说明原因。
+        preview = {
+          ...preview,
+          loading: false,
+          error: t(currentLocale, "previewRestoredUnavailable"),
+        };
+        renderBreakdown();
+        return;
+      }
       await handlePreviewMissing(request);
       return;
     }
@@ -1547,7 +1562,11 @@ function parseSummary(body: string): SnapshotSummary | null {
       return null;
     }
     const parsed = value as unknown as SnapshotSummary;
-    return { ...parsed, baseline: value.baseline === true };
+    return {
+      ...parsed,
+      baseline: value.baseline === true,
+      restored: value.restored === true,
+    };
   } catch {
     return null;
   }

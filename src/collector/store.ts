@@ -6,7 +6,8 @@ export const MAX_SESSIONS = 20;
 export interface StoredSnapshot {
   /** 单调递增，用来丢弃迟到的异步补齐结果。 */
   id: number;
-  draft: SnapshotDraft;
+  /** 从磁盘恢复的快照没有 draft：正文预览没有持久化。 */
+  draft: SnapshotDraft | null;
   summary: SnapshotSummary;
 }
 
@@ -34,11 +35,22 @@ export class SnapshotStore {
 
     this.#records.delete(draft.sessionID);
     this.#records.set(draft.sessionID, record);
-    while (this.#records.size > MAX_SESSIONS) {
-      const oldest = this.#records.keys().next();
-      if (oldest.done) break;
-      this.#records.delete(oldest.value);
-    }
+    this.#trim();
+    return record;
+  }
+
+  /** 启动时读回上一份快照；没有 draft，/item 自然返回 404。 */
+  restore(summary: SnapshotSummary): StoredSnapshot {
+    const id = this.#nextId;
+    this.#nextId += 1;
+    const record: StoredSnapshot = {
+      id,
+      draft: null,
+      summary: { ...summary, restored: true },
+    };
+    this.#records.delete(summary.sessionID);
+    this.#records.set(summary.sessionID, record);
+    this.#trim();
     return record;
   }
 
@@ -47,13 +59,22 @@ export class SnapshotStore {
   }
 
   /** 只有当前记录仍是发起补齐的那一份时才替换。 */
-  replace(sessionID: string, id: number, summary: SnapshotSummary): void {
+  replace(sessionID: string, id: number, summary: SnapshotSummary): SnapshotSummary | undefined {
     const current = this.#records.get(sessionID);
-    if (!current || current.id !== id) return;
+    if (!current || current.id !== id) return undefined;
     this.#records.set(sessionID, { ...current, summary });
+    return summary;
   }
 
   get size(): number {
     return this.#records.size;
+  }
+
+  #trim(): void {
+    while (this.#records.size > MAX_SESSIONS) {
+      const oldest = this.#records.keys().next();
+      if (oldest.done) break;
+      this.#records.delete(oldest.value);
+    }
   }
 }
