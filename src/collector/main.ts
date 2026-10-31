@@ -7,6 +7,7 @@ import { COLLECTOR_VERSION } from "../shared/version.ts";
 import { BaselineStore, baselineSummary, type BaselineTemplate } from "./baseline.ts";
 import { enrichSnapshot, WindowResolver } from "./enrich.ts";
 import { modelRefID, type PluginContext, type SessionContext, type SessionInfo } from "./opencode.ts";
+import { persistenceEnabled, readSnapshots, resolveSnapshotDir, SnapshotWriter } from "./persist.ts";
 import { baselineDraft, buildDraft, DEFAULT_WINDOW } from "./snapshot.ts";
 import { SnapshotStore } from "./store.ts";
 
@@ -54,6 +55,14 @@ const collector: CollectorPlugin = {
     const store = new SnapshotStore();
     const baselines = new BaselineStore();
     const windows = new WindowResolver(context);
+    const persistDir = persistenceEnabled() ? resolveSnapshotDir() : null;
+    const writer = new SnapshotWriter(persistDir);
+    if (persistDir) {
+      // 只恢复骨架；正文预览没有落盘，/item 会返回 404。
+      for (const summary of await readSnapshots(persistDir).catch(() => [])) {
+        store.restore(summary);
+      }
+    }
 
     const hook = context.session?.hook
       ? await context.session.hook("context", (sessionContext: SessionContext) => {
@@ -63,7 +72,11 @@ const collector: CollectorPlugin = {
             baselines.remember(sessionContext.agent, baselineDraft(draft));
           }
           const record = store.add(draft);
-          void enrichSnapshot(context, store, windows, record).catch(() => {});
+          void enrichSnapshot(context, store, windows, record)
+            .then((summary) => {
+              if (summary) writer.schedule(summary);
+            })
+            .catch(() => {});
         })
       : null;
 
@@ -137,7 +150,7 @@ const collector: CollectorPlugin = {
           }
 
           const items = record
-            ? record.draft.items
+            ? record.draft?.items
             : (await resolveBaselineTemplate(sessionID))?.items;
           const item = items?.find((candidate) => candidate.id === itemId);
           if (!item) {
@@ -195,7 +208,11 @@ const collector: CollectorPlugin = {
         try {
           await close(server);
         } finally {
-          await removeDiscovery(discoveryFile);
+          try {
+            await writer.dispose();
+          } finally {
+            await removeDiscovery(discoveryFile);
+          }
         }
       }
     };

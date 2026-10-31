@@ -1,5 +1,6 @@
 import { modelRefID, type ModelInfo, type ModelRef, type PluginContext, type SessionMessageInfo } from "./opencode.ts";
 import { DEFAULT_WINDOW, finalizeSnapshot } from "./snapshot.ts";
+import type { SnapshotSummary } from "../shared/types.ts";
 import type { SnapshotStore, StoredSnapshot } from "./store.ts";
 
 function count(value: unknown): number {
@@ -95,14 +96,15 @@ export async function enrichSnapshot(
   store: SnapshotStore,
   windows: WindowResolver,
   record: StoredSnapshot,
-): Promise<void> {
+): Promise<SnapshotSummary | undefined> {
   const { draft, id } = record;
+  if (!draft) return undefined;
   const [used, window] = await Promise.all([
     readProviderUsed(context, draft.sessionID).catch(() => null),
     windows.resolve(draft.modelRef).catch(() => ({ window: DEFAULT_WINDOW, assumed: true })),
   ]);
 
-  store.replace(
+  return store.replace(
     draft.sessionID,
     id,
     finalizeSnapshot(draft, used, window.window, window.assumed),

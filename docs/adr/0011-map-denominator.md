@@ -1,16 +1,16 @@
-# 地图改用窗口分母，空闲格子显式留白
+# The map uses the window as denominator and leaves free cells visibly blank
 
-地图的每一格代表窗口的 1/200，已用部分按分类铺在前面的格子里，剩余格子画成带 1px 描边的空格，表示 Free space。默认分母是模型窗口；点地图标题旁的 Zoom 或按 `Z` 切到 Fit，分母变成 `min(window, ceil2sig(used × 1.15))`，最低 10,000。图例同时给出 Free space 与已用的 token 数。
+Each cell of the map represents 1/200 of the window. The used portion fills the first cells by category, and the remaining cells are drawn as empty cells with a 1px outline to represent Free space. The default denominator is the model window; clicking Zoom next to the map title or pressing `Z` switches to Fit, where the denominator becomes `min(window, ceil2sig(used × 1.15))`, with a floor of 10,000. The legend shows both Free space and the used token count.
 
-这样地图同时回答「里面是什么」和「还剩多少」，不必在 bar、Breakdown 与地图之间来回对照。默认用窗口做分母，格子位置在同一个 session 内保持稳定，连续请求之间可以直接比较占用增长；Fit 只作为近距离观察构成的手段。
+The map thus answers both "what is inside" and "how much is left", without cross-checking the bar, Breakdown, and map. With the window as the default denominator, cell positions stay stable within a session, so usage growth is directly comparable across consecutive requests; Fit is only a way to inspect composition up close.
 
-**Considered Options**
+**Considered options**
 
-- 保持 ADR 0006 的「只画已用」：占用低时看不出剩余空间，用户明确反馈「看不出还剩多少空余」。
-- 默认用 Fit：每次请求后分母变化，格子会重排，无法比较两次请求的占用。
-- 加第三档缩放或真正的放大视图：当前只有 200 格，两档已经覆盖「看总量」与「看构成」。
-- 空闲格用点阵或单独一条 Free 条：5px 格子上点阵噪声大，单独一条又会重复 bar 的职责。
+- Keep ADR 0006's "draw only used": at low usage the remaining space is invisible, and users explicitly reported that they could not tell how much space was left.
+- Default to Fit: the denominator changes after every request, cells rearrange, and two requests cannot be compared.
+- Add a third zoom level or a true zoomed view: there are only 200 cells now, and two levels already cover "see the total" and "see the composition".
+- Draw free cells as a dot pattern or a separate Free bar: dots are noisy on 5px cells, and a separate bar duplicates the bar's role.
 
 **Consequences**
 
-ADR 0006 中「格子只表达已用构成」的部分被本记录取代，固定色板、`data-oc-theme` 与硬停靠渐变仍然有效。已用格数按 `round(used / denominator × 200)` 取整，最低 1 格；不足一格的用量仍会占满一格，精确数字看用量卡与 Breakdown。Fit 的 `ceil2sig` 与 pi-context-view 一致，标签显示取整后的分母（例如 99k），不显示原始值。
+The part of ADR 0006 stating that cells express only the used composition is superseded by this record; the fixed palette, `data-oc-theme`, and hard-stop gradients still apply. The used cell count is rounded as `round(used / denominator × 200)`, with a minimum of 1 cell; usage below one cell still fills one cell, and exact numbers are in the usage card and Breakdown. Fit's `ceil2sig` matches pi-context-view, and the label shows the rounded denominator (for example 99k), not the raw value.

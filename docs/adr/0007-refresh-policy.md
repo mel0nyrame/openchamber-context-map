@@ -1,18 +1,18 @@
-# 只在 busy 时轮询，失败按来源分层
+# Poll only while busy; layer failures by source
 
-面板不常驻轮询。session busy 时每 2 秒刷新一次，转入 idle 立即停止，切 session 或面板隐藏也停止。用一条 `setTimeout` 链而不是 `setInterval`：上一次请求结束再等 2 秒，请求不会重叠，停止与重置也更简单。
+The panel does not poll continuously. While a session is busy it refreshes every 2 seconds; when the session turns idle it stops immediately, and it also stops when the session changes or the panel is hidden. It uses a `setTimeout` chain rather than `setInterval`: the next wait starts after the previous request finishes, requests never overlap, and stopping or resetting is simpler.
 
-失败分两类。host 或 Service 请求失败计入连续失败，连续 3 次停止自动刷新并显示 banner，手动刷新成功后恢复。Collector 断开不计入：`/health` 仍然成功，只是 `collector.connected` 为 false，面板走「Collector 未连接」状态并继续轮询。把 Collector 断开算作失败，Collector 恢复后就无法自动回到轮询。
+Failures fall into two classes. A failed host or Service request counts toward consecutive failures; after 3 in a row the panel stops automatic refresh and shows a banner, and a successful manual refresh restores it. A disconnected Collector does not count: `/health` still succeeds, only `collector.connected` is false, so the panel enters the "Collector is not running" state and keeps polling. Counting a disconnected Collector as a failure would prevent polling from resuming automatically when the Collector comes back.
 
-SDK 2.5.3 没有面板可见性或关闭回调，隐藏检测用 `document.visibilitychange` 与 `pagehide` / `pageshow`。session 的 `failure` 生命周期只表示状态未知，不改写 busy。
+SDK 2.5.3 has no panel visibility or close callback, so hidden detection uses `document.visibilitychange` and `pagehide` / `pageshow`. A session's `failure` lifecycle only means the state is unknown; it does not rewrite busy.
 
-**Considered Options**
+**Considered options**
 
-- 常驻 2 秒轮询：idle 时也发请求，「更新于」还会随请求跳动。
-- `setInterval`：请求慢时会重叠，停止与重置难以对齐。
-- 把 Collector 断开计入失败：与既有的连接状态重复，且停止轮询后 Collector 恢复也回不来。
-- 用 `focus` / `blur` 判断可见：面板可见但未聚焦时会误判。
+- Poll every 2 seconds continuously: sends requests while idle, and "Updated" would keep moving with each request.
+- `setInterval`: requests overlap when one is slow, and stopping or resetting is hard to align.
+- Count a disconnected Collector as a failure: duplicates the existing connection state, and once polling stops it cannot resume when the Collector recovers.
+- Use `focus` / `blur` to detect visibility: misjudges when the panel is visible but not focused.
 
 **Consequences**
 
-宿主若用 CSS 隐藏面板而不改变文档可见性，busy 时仍会轮询；要精确覆盖需要宿主补 API。`failure` 且 busy 为 true 时，若宿主之后不再发 `busy=false`，会一直轮询到切 session 或隐藏。
+If the host hides the panel with CSS without changing document visibility, the panel still polls while busy; covering that case exactly requires a host API. When `failure` is set and busy is true, if the host never sends `busy=false` afterwards, the panel keeps polling until the session changes or the panel is hidden.

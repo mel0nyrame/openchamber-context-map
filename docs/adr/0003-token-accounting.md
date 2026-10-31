@@ -1,12 +1,12 @@
-# Token 口径：估算占比 + provider 校准
+# Token accounting: estimated shares calibrated against provider usage
 
-`hook("context")` 的事件里没有任何 usage 字段，只有组装后的内容，所以分类 token 只能按 `ceil(characters / 4)` 估算。Used 不用估算值直接当结论：取同一 session 最近一条 assistant 的 `tokens`，用 `input + cache.read + cache.write` 作为真实输入总量，再把各分类的估算 token 按比例缩放到这个总量。`input` 本身不含 cache（`@opencode/schema/dist/token-usage.js:12-14`），只读 `input` 会低估。没有 provider 值、或快照里含 `media` 时，整个快照标为 estimated。
+The event from `hook("context")` has no usage fields, only the assembled content, so category tokens can only be estimated as `ceil(characters / 4)`. Used is not taken directly from the estimate: the Collector reads the `tokens` of the most recent assistant message in the same session, uses `input + cache.read + cache.write` as the real input total, and scales each category's estimated tokens proportionally to that total. `input` itself excludes cache (`@opencode/schema/dist/token-usage.js:12-14`), so reading only `input` underestimates. When there is no provider value, or the snapshot contains `media`, the whole snapshot is marked estimated.
 
-**Considered Options**
+**Considered options**
 
-- 纯估算：实现最简单，但误差随内容类型漂移，用户无法判断可信度。
-- 在 hook 里 `await ctx.session.context()` 取 usage：hook 在 provider dispatch 前被逐个 await，会把磁盘读取的延迟加到每次模型请求上，且拿到的仍是上一轮的值。
+- Pure estimation: simplest to implement, but the error drifts with content type and users cannot judge confidence.
+- `await ctx.session.context()` inside the hook to get usage: the hook is awaited one by one before provider dispatch, so it adds disk-read latency to every model request, and the value returned is still from the previous turn.
 
 **Consequences**
 
-tool continuation 场景下 Used 滞后一轮，误差约为上一轮的 assistant 输出加一条 tool result。图片按 0 token 计，多图时整体标 estimated。补齐时机与取整方式见 `docs/adr/0005-snapshot-enrichment.md`。
+For tool continuations, Used lags one turn; the error is roughly the previous turn's assistant output plus one tool result. Images count as 0 tokens, and with multiple images the whole snapshot is marked estimated. See `docs/adr/0005-snapshot-enrichment.md` for when enrichment runs and how rounding works.

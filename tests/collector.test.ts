@@ -83,14 +83,26 @@ async function startCollector(
   file: string;
   fake: ReturnType<typeof fakeContext>;
 }> {
-  discoveryDir = await mkdtemp(join(tmpdir(), "context-map-collector-"));
-  process.env.CONTEXT_MAP_DISCOVERY_DIR = discoveryDir;
+  return startCollectorIn(await mkdtemp(join(tmpdir(), "context-map-collector-")), options);
+}
+
+async function startCollectorIn(
+  dir: string,
+  options: FakeOptions = {},
+): Promise<{
+  port: number;
+  token: string;
+  file: string;
+  fake: ReturnType<typeof fakeContext>;
+}> {
+  discoveryDir = dir;
+  process.env.CONTEXT_MAP_DISCOVERY_DIR = dir;
   const fake = fakeContext(options);
   dispose = await collector.setup(fake.ctx);
 
-  const files = (await readdir(discoveryDir)).filter((name) => name.endsWith(".json"));
+  const files = (await readdir(dir)).filter((name) => name.endsWith(".json"));
   expect(files).toHaveLength(1);
-  const file = join(discoveryDir, files[0]!);
+  const file = join(dir, files[0]!);
   const record = JSON.parse(await readFile(file, "utf8")) as { port: number; token: string };
   return { port: record.port, token: record.token, file, fake };
 }
@@ -624,4 +636,35 @@ test("Collector dispose 关闭服务、删除 discovery 文件并释放 hook", a
   expect(fake.disposed).toBe(true);
   await expect(stat(file)).rejects.toThrow();
   await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow();
+});
+
+test("重启后恢复上一份快照骨架，正文预览返回 404", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "context-map-persist-"));
+  const first = await startCollectorIn(dir, { models: MODELS, history: { "session-restart": [assistantUsage(1200, 300, 100)] } });
+  await first.fake.fire(baseContext("session-restart"));
+  const live = await waitForSummary(
+    first.port,
+    first.token,
+    "session-restart",
+    (summary) => summary.used > 0,
+  );
+  expect(live.restored).toBe(false);
+
+  const cleanup = dispose!;
+  dispose = undefined;
+  await cleanup();
+
+  const second = await startCollectorIn(dir);
+  const restored = await getSummary(second.port, second.token, "session-restart");
+  expect(restored).not.toBeNull();
+  expect(restored!.restored).toBe(true);
+  expect(restored!.used).toBe(live.used);
+  expect(restored!.window).toBe(live.window);
+  expect(restored!.items.map((item) => item.id)).toEqual(live.items.map((item) => item.id));
+
+  const item = await fetch(
+    `http://127.0.0.1:${second.port}/item?sessionID=session-restart&itemId=${encodeURIComponent(restored!.items[0]!.id)}`,
+    { headers: auth(second.token) },
+  );
+  expect(item.status).toBe(404);
 });

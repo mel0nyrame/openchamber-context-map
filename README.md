@@ -5,11 +5,11 @@ Context Map is an OpenChamber rail panel that shows where the current session's 
 - **OpenChamber extension**: the panel and a host-side Service.
 - **OpenCode Collector**: an in-process OpenCode plugin that records the assembled system prompt, tools, and messages just before a request goes to the provider.
 
-The panel keeps only the last request per session. Snapshots live in memory and are never written to disk; restarting OpenCode clears them. Tokens are estimated from character counts and calibrated against the most recent assistant's `input + cache.read + cache.write`. See `docs/adr/0003-token-accounting.md`.
+The panel keeps only the last request per session. Snapshots live in memory, and the Collector also persists a summary of each one, so the panel can restore the last context after OpenCode restarts; item previews are not persisted. Tokens are estimated from character counts and calibrated against the most recent assistant's `input + cache.read + cache.write`. See `docs/adr/0003-token-accounting.md`.
 
 ## Requirements
 
-- macOS or Linux (only macOS has been verified; Windows is untested).
+- macOS or Linux. Only macOS has been verified; Windows is untested.
 - [Bun](https://bun.sh/) 1.3 or newer.
 - OpenChamber 2.5.2 (verified version).
 - OpenCode 2.2.2 (verified version) with the V2 plugin API.
@@ -31,9 +31,9 @@ Only Bun is required. The installer needs no `node_modules` and does not build a
 
 After installing, **fully quit** OpenCode and OpenChamber, then reopen them:
 
-- OpenCode must exit completely; closing the window is not enough. The Collector only loads at process start.
+- OpenCode must exit completely. Closing the window is not enough; the Collector only loads at process start.
 - Open the **Context Map** panel from the rail in OpenChamber.
-- The status dot next to the title is green and shows `v0.1.0`; hovering it reads `Collector connected · v0.1.0`. If it says `Collector is not running`, confirm OpenCode was actually restarted.
+- The status dot next to the title is green and shows `v0.1.0`; hovering it reads `Collector connected · v0.1.0`. If it says `Collector is not running`, confirm that OpenCode was actually restarted.
 
 Default paths:
 
@@ -52,7 +52,7 @@ XDG_CONFIG_HOME=/path/to/config bun run install
 
 The installer is idempotent: running it again does not create a second symlink, a second Collector file, or duplicate registry entries. It only accepts an empty target, a symlink pointing at this repository, or a Collector file carrying the `@context-map-collector` marker. If a target already exists and was not created by this tool, the installer stops and leaves the file untouched.
 
-Quit OpenChamber before installing or uninstalling so a running host does not rewrite `extensions.json` at the same time; the change requires a restart anyway.
+Quit OpenChamber before installing or uninstalling. A running host may rewrite `extensions.json` at the same time, and the change requires a restart anyway.
 
 ## Use
 
@@ -63,6 +63,8 @@ The panel has three parts:
 - **Breakdown**: one row per non-empty category plus Free space. Click a row to list its items; click an item to read its preview. `Esc` goes back one level, `↑`/`↓` or `j`/`k` moves, and `Enter` opens the focused row.
 
 Before a session's first request, the panel shows a **baseline** built from the most recent real request for the same agent and model: system prompt and tool definitions only. It is marked `baseline` and `estimated`, and the first real request replaces it. If no such request exists yet, the panel waits for the first request instead.
+
+The Collector saves each snapshot's summary to disk, so the panel still shows the last context after OpenCode restarts. Restored snapshots are marked `last run`. Only the summary and item heads are kept; item previews are not, so opening an item from a restored snapshot says the preview is unavailable until a new request arrives.
 
 The panel follows OpenChamber's language. English is the source language; Chinese is translated; any other locale falls back to English.
 
@@ -82,7 +84,7 @@ Then fully quit and reopen OpenCode and OpenChamber. Installer output such as `U
 
 The running Collector version does not match the version the extension expects. The panel only warns; it never updates the Collector automatically (see `docs/adr/0008-degradation-layers.md`).
 
-1. Run `bun run install` in the repository and confirm the Collector was updated to the expected version.
+1. Run `bun run install` in the repository and confirm that the Collector was updated to the expected version.
 2. Fully quit **every** OpenCode instance, then reopen. Closing one window or restarting one instance can leave an old process registered.
 3. The status should return to `Collector connected · vX.Y.Z`, and the warning should disappear.
 
@@ -139,7 +141,7 @@ If the discovery file exists but the panel says `Collector is not responding`, a
 
 The panel shows `Service is not ready`, or the host returns `NO_SERVICE` / `NOT_GRANTED`.
 
-1. Open **Settings → Extensions** in OpenChamber and confirm Context Map is enabled with the Service capability granted.
+1. Open **Settings → Extensions** in OpenChamber and confirm that Context Map is enabled with the Service capability granted.
 2. Run `bun run install` again; it registers the extension and grants `service` if the registry entry is missing it.
 3. Fully quit and reopen OpenChamber.
 
@@ -151,7 +153,7 @@ The status is connected, but the panel waits for the first request. The current 
 
 - Send a message in the session; the snapshot appears after the request completes.
 - Only the last request is kept; switching sessions shows each session's own last request.
-- Restarting OpenCode clears memory, so a new session is empty until its first request.
+- Restarting OpenCode clears memory; restored summaries come back from disk, but a new session stays empty until its first request.
 - The panel stops polling while idle. If a request just finished and nothing changed, click refresh in the usage card.
 
 ### Port conflicts
@@ -164,7 +166,7 @@ OpenChamber assigns the Service port through `OPENCHAMBER_SERVICE_PORT`; the Col
 
 ### The panel is missing from the rail
 
-1. Open **Settings → Extensions** and confirm Context Map is not disabled.
+1. Open **Settings → Extensions** and confirm that Context Map is not disabled.
 2. Check that `paths` in `~/.config/openchamber/extensions.json` contains `.../extensions/context-map`; rerun `bun run install` if it does not.
 3. Fully quit and reopen OpenChamber. A running host does not notice external registry changes.
 
@@ -229,12 +231,14 @@ scripts/         install, dev, build
 panel/           Panel build output
 service/         Service build output
 collector/       Collector build output
-docs/adr/        Architecture decision records (Chinese)
+docs/adr/        Architecture decision records (English, with Chinese translations)
 ```
 
 ## Privacy
 
-- Snapshots stay in memory; each session keeps only its last request, up to 20 sessions.
+- Each session keeps only its last request, up to 20 sessions.
+- The Collector saves each snapshot's summary to `~/.local/state/openchamber-context-map/snapshots`: item heads (200 characters), token counts, and the model name. Item previews are not saved. Files are mode 0600 in a 0700 directory and expire after 7 days.
+- Set `CONTEXT_MAP_PERSIST=0` to keep snapshots in memory only.
 - A preview is truncated to 8000 characters, in memory only.
 - Discovery files are mode 0600 and their directory is 0700. The bearer token is used only between the Collector and the Service and never reaches the panel.
 

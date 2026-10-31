@@ -1,65 +1,65 @@
 # Context Map
 
-Context Map 是 OpenChamber 右侧 rail 上的一个面板，展示当前 session 最后一次模型请求的上下文构成。它由两部分组成：运行在 OpenCode 进程内的 Collector，和提供界面与代理的 OpenChamber extension。
+Context Map is a panel on the right rail of OpenChamber that shows the context composition of the current session's last model request. It has two parts: the Collector, which runs inside the OpenCode process, and the OpenChamber extension, which provides the interface and the proxy.
 
 ## Language
 
-**Snapshot（快照）**:
-某一次模型请求在发出前一刻的上下文构成记录，包含分类、条目和 token 统计。
-_Avoid_: 报告、dump、trace
+**Snapshot**:
+A record of the context composition of a model request at the moment before it is sent, including categories, items, and token statistics.
+_Avoid_: report, dump, trace
 
-**Last request（最后一次请求）**:
-当前 session 最近一次即将发给模型提供方的请求，包含同一轮对话中的 tool continuation。
-_Avoid_: 当前上下文、latest prompt
+**Last request**:
+The most recent request the current session is about to send to the model provider, including tool continuations in the same turn.
+_Avoid_: current context, latest prompt
 
-**Category（分类）**:
-快照的 8 个固定桶之一：System、Tool definitions、User messages、Assistant text、Reasoning、Tool calls、Tool results、Other。
-_Avoid_: 分组、类型、section
+**Category**:
+One of the snapshot's eight fixed buckets: System, Tool definitions, User messages, Assistant text, Reasoning, Tool calls, Tool results, Other.
+_Avoid_: grouping, type, section
 
-**Item（条目）**:
-分类里的最小可展示单位，即一个 system part、一个 tool definition，或一个 message part。
-_Avoid_: entry、行、记录
+**Item**:
+The smallest displayable unit within a category: one system part, one tool definition, or one message part.
+_Avoid_: entry, row, record
 
-**Preview（预览）**:
-Item 的截断文本，最多 8000 字符，只存在于内存。
-_Avoid_: 内容、正文、原文
+**Preview**:
+The truncated text of an Item, at most 8000 characters, held only in memory.
+_Avoid_: content, body, source text
 
-**Used（已用上下文）**:
-最后一次请求实际占用的 token 总量。
-_Avoid_: 占用、usage、consumed
+**Used**:
+The total number of tokens actually used by the last request.
+_Avoid_: occupancy, usage, consumed
 
-**Window（上下文窗口）**:
-模型可接受的最大上下文 token 数，取自模型声明的 `limit.context`。
-_Avoid_: 上限、capacity
+**Window**:
+The maximum number of context tokens the model accepts, taken from the model's declared `limit.context`.
+_Avoid_: limit, capacity
 
-**Free space（空闲空间）**:
-Window 减去 Used 的剩余部分。
-_Avoid_: 剩余、headroom
+**Free space**:
+The part of Window left after subtracting Used.
+_Avoid_: remainder, headroom
 
-**Estimated（估算）**:
-由字符数推算、未经 provider 确认的 token 数。
-_Avoid_: 近似、approximate
+**Estimated**:
+A token count derived from character counts and not confirmed by the provider.
+_Avoid_: approximation, approximate
 
-**Collector（采集器）**:
-运行在 OpenCode 进程内的插件，负责在请求发出前记录快照。
-_Avoid_: 插件、agent、探针
+**Collector**:
+The plugin that runs inside the OpenCode process and records snapshots before requests are sent.
+_Avoid_: plugin, agent, probe
 
-**Discovery file（发现文件）**:
-Collector 启动时写下的、供 extension 找到它的本地文件。
-_Avoid_: 注册表、config
+**Discovery file**:
+The local file the Collector writes at startup so the extension can find it.
+_Avoid_: registry, config
 
-**Stale discovery（失效发现文件）**:
-指向已经退出的 Collector 的发现文件，由 Service 在连接失败时删除。
-_Avoid_: 僵尸文件、残留配置
+**Stale discovery**:
+A discovery file that points to a Collector that has exited; the Service deletes it after a failed connection.
+_Avoid_: zombie file, leftover config
 
-**Service（服务）**:
-OpenChamber extension 的 host 侧进程，负责发现 Collector 并把快照转给 Panel。
-_Avoid_: 后端、server、proxy
+**Service**:
+The host-side process of the OpenChamber extension; it discovers Collectors and passes snapshots to the Panel.
+_Avoid_: backend, server, proxy
 
-**Panel（面板）**:
-运行在沙箱 iframe 里的界面，只负责展示 Service 提供的数据。
-_Avoid_: 前端、UI、webview
+**Panel**:
+The interface running in a sandboxed iframe; it only displays data provided by the Service.
+_Avoid_: frontend, UI, webview
 
 **Surface**:
-OpenChamber 里一个可挂载界面位置的标识；Context Map 使用 `plugin:context-map`。
-_Avoid_: tab、view
+An identifier for a mountable interface location in OpenChamber; Context Map uses `plugin:context-map`.
+_Avoid_: tab, view
