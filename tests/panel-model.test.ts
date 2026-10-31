@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { COLLECTOR_VERSION } from "../src/shared/version.ts";
+import { describeHostFailure } from "../src/panel/failure.ts";
 import {
   COLLECTOR_INSTALL_PATH,
   createPanelModel,
@@ -25,7 +26,11 @@ function readyModel() {
 describe("PanelModel 内容优先级", () => {
   test("未 booted 时显示 checking 和 connecting 占位", () => {
     const view = createPanelModel().getView();
-    expect(view.status).toEqual({ kind: "checking" });
+    expect(view.status).toEqual({
+      kind: "checking",
+      titleKey: "statusCheckingTitle",
+      detailKey: "statusCheckingDetail",
+    });
     expect(placeholder(view)).toEqual({
       kind: "placeholder",
       titleKey: "connectingTitle",
@@ -38,7 +43,11 @@ describe("PanelModel 内容优先级", () => {
     const model = createPanelModel();
     model.setBooted(true);
     const view = model.getView();
-    expect(view.status).toEqual({ kind: "checking" });
+    expect(view.status).toEqual({
+      kind: "checking",
+      titleKey: "statusCheckingTitle",
+      detailKey: "statusCheckingDetail",
+    });
     expect(placeholder(view)).toMatchObject({
       titleKey: "noSessionTitle",
       detailKey: "noSessionDetail",
@@ -126,14 +135,23 @@ describe("PanelModel 内容优先级", () => {
     });
 
     model.setHostProblem(null);
-    expect(model.getView().status).toEqual({ kind: "checking" });
+    expect(model.getView().status).toEqual({
+      kind: "checking",
+      titleKey: "statusCheckingTitle",
+      detailKey: "statusCheckingDetail",
+    });
   });
 
   test("Collector unreachable 显示 unreachable 占位", () => {
     const model = readyModel();
     model.setConnection({ connected: false, reason: "unreachable" });
     const view = model.getView();
-    expect(view.status).toEqual({ kind: "disconnected", reason: "unreachable" });
+    expect(view.status).toEqual({
+      kind: "disconnected",
+      reason: "unreachable",
+      titleKey: "collectorUnreachableTitle",
+      detailKey: "collectorUnreachableDetail",
+    });
     expect(placeholder(view)).toMatchObject({
       titleKey: "collectorUnreachableTitle",
       detailKey: "collectorUnreachableDetail",
@@ -145,7 +163,13 @@ describe("PanelModel 内容优先级", () => {
     const model = readyModel();
     model.setConnection({ connected: false, reason: "not_found" });
     const view = model.getView();
-    expect(view.status).toEqual({ kind: "disconnected", reason: "not_found" });
+    expect(view.status).toEqual({
+      kind: "disconnected",
+      reason: "not_found",
+      titleKey: "collectorNotRunning",
+      detailKey: "collectorNotRunningDetail",
+      args: { path: COLLECTOR_INSTALL_PATH },
+    });
     expect(placeholder(view)).toMatchObject({
       titleKey: "collectorNotRunning",
       detailKey: "collectorNotRunningDetail",
@@ -204,6 +228,28 @@ describe("PanelModel 状态", () => {
       version: "1.2.3",
       outdated: true,
       expectedVersion: "2.0.0",
+      titleKey: "statusConnectedTitle",
+      detailKey: "statusOutdatedDetail",
+      args: { version: "v1.2.3", expected: "v2.0.0" },
+    });
+  });
+
+  test("outdated 的 expectedVersion 和文案参数来自模型", () => {
+    const model = readyModel();
+    model.setConnection({
+      connected: true,
+      version: "1.2.3",
+      outdated: true,
+      expectedVersion: "9.9.9",
+    });
+    expect(model.getView().status).toEqual({
+      kind: "connected",
+      version: "1.2.3",
+      outdated: true,
+      expectedVersion: "9.9.9",
+      titleKey: "statusConnectedTitle",
+      detailKey: "statusOutdatedDetail",
+      args: { version: "v1.2.3", expected: "v9.9.9" },
     });
   });
 
@@ -215,6 +261,44 @@ describe("PanelModel 状态", () => {
       version: "1.2.3",
       outdated: true,
       expectedVersion: COLLECTOR_VERSION,
+      titleKey: "statusConnectedTitle",
+      detailKey: "statusOutdatedDetail",
+      args: { version: "v1.2.3", expected: `v${COLLECTOR_VERSION}` },
+    });
+  });
+
+  test("状态条与占位区对 Collector 故障共用同一套文案", () => {
+    for (const reason of ["not_found", "unreachable"] as const) {
+      const model = readyModel();
+      model.setConnection({ connected: false, reason });
+      const view = model.getView();
+      if (view.status.kind !== "disconnected") throw new Error("expected disconnected");
+      const body = placeholder(view);
+      expect({
+        titleKey: view.status.titleKey,
+        detailKey: view.status.detailKey,
+        args: view.status.args,
+      }).toEqual({
+        titleKey: body.titleKey,
+        detailKey: body.detailKey,
+        args: body.args,
+      });
+    }
+  });
+
+  test("failed 状态使用宿主 copy", () => {
+    const model = readyModel();
+    model.setHostProblem(describeHostFailure("DISABLED"));
+    const view = model.getView();
+    expect(view.status).toEqual({
+      kind: "failed",
+      titleKey: "hostDisabledTitle",
+      detailKey: "hostDisabledDetail",
+    });
+    expect(placeholder(view)).toMatchObject({
+      titleKey: "hostDisabledTitle",
+      detailKey: "hostDisabledDetail",
+      retry: true,
     });
   });
 
@@ -223,9 +307,18 @@ describe("PanelModel 状态", () => {
     model.setConnection(connected);
     expect(model.getView().status.kind).toBe("connected");
     model.setConnection({ connected: false, reason: "unreachable" });
-    expect(model.getView().status).toEqual({ kind: "disconnected", reason: "unreachable" });
+    expect(model.getView().status).toEqual({
+      kind: "disconnected",
+      reason: "unreachable",
+      titleKey: "collectorUnreachableTitle",
+      detailKey: "collectorUnreachableDetail",
+    });
     model.setConnection(null);
-    expect(model.getView().status).toEqual({ kind: "checking" });
+    expect(model.getView().status).toEqual({
+      kind: "checking",
+      titleKey: "statusCheckingTitle",
+      detailKey: "statusCheckingDetail",
+    });
   });
 
   test("setSummary 清除已有的 summary problem", () => {

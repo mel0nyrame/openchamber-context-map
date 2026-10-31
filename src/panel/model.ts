@@ -2,7 +2,8 @@
  * 面板的展示状态、内容优先级与交互状态。
  *
  * 模型只持有数据，不碰 DOM，也不拥有刷新生命周期；入口把 host、连接和
- * RefreshController 的结果送进来，视图只读取 `getView()` 并负责翻译与绘制。
+ * RefreshController 的结果送进来。状态条和占位区的文案也在这里决定，
+ * 视图只读取 `getView()` 并负责翻译与绘制。
  */
 
 import { COLLECTOR_VERSION } from "../shared/version.ts";
@@ -14,6 +15,7 @@ import type {
   SnapshotSummary,
 } from "../shared/types.ts";
 import type { HostFailureCopy } from "./failure.ts";
+import { versionLabel } from "./format.ts";
 import type { MessageKey } from "./i18n.ts";
 import {
   buildBreakdown,
@@ -38,11 +40,21 @@ export const COLLECTOR_INSTALL_PATH = "~/.config/opencode/plugins/";
 
 export type SummaryProblem = "timeout" | "other";
 
+/** 状态条文案：模型决定 key 和参数，视图只负责按 locale 翻译。 */
+export type PanelStatusCopy = {
+  titleKey: MessageKey;
+  detailKey: MessageKey;
+  args?: Record<string, string | number>;
+};
+
 export type PanelState =
-  | { kind: "checking" }
-  | { kind: "connected"; version: string; outdated?: boolean; expectedVersion?: string }
-  | { kind: "disconnected"; reason: "not_found" | "unreachable" }
-  | { kind: "failed"; titleKey: MessageKey; detailKey: MessageKey };
+  | ({ kind: "checking" } & PanelStatusCopy)
+  | ({ kind: "connected"; version: string } & PanelStatusCopy & (
+    | { outdated?: false; expectedVersion?: undefined }
+    | { outdated: true; expectedVersion: string }
+  ))
+  | ({ kind: "disconnected"; reason: "not_found" | "unreachable" } & PanelStatusCopy)
+  | ({ kind: "failed" } & PanelStatusCopy);
 
 export interface PlaceholderBody {
   kind: "placeholder";
@@ -185,27 +197,62 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
     ?? (() => Promise.resolve<ItemLoadResult>({ kind: "read-error" }));
   const onPreviewMissing = deps.onPreviewMissing ?? (() => {});
 
+  /**
+   * 状态条与占位区共用的 Collector 故障文案；只在这里决定 key 和参数，
+   * 避免两处对同一个故障给出不同诊断。
+   */
+  function collectorCopy(reason: "not_found" | "unreachable"): PanelStatusCopy {
+    if (reason === "unreachable") {
+      return {
+        titleKey: "collectorUnreachableTitle",
+        detailKey: "collectorUnreachableDetail",
+      };
+    }
+    return {
+      titleKey: "collectorNotRunning",
+      detailKey: "collectorNotRunningDetail",
+      args: { path: COLLECTOR_INSTALL_PATH },
+    };
+  }
+
   function status(): PanelState {
     const failure = hostProblem ?? statusFailure;
     if (failure !== null) {
       return { kind: "failed", titleKey: failure.titleKey, detailKey: failure.detailKey };
     }
-    if (!booted || connection === null) return { kind: "checking" };
+    if (!booted || connection === null) {
+      return {
+        kind: "checking",
+        titleKey: "statusCheckingTitle",
+        detailKey: "statusCheckingDetail",
+      };
+    }
     if (connection.connected && typeof connection.version === "string" && connection.version !== "") {
       if (connection.outdated === true) {
+        const expectedVersion = connection.expectedVersion ?? COLLECTOR_VERSION;
         return {
           kind: "connected",
           version: connection.version,
           outdated: true,
-          expectedVersion: connection.expectedVersion ?? COLLECTOR_VERSION,
+          expectedVersion,
+          titleKey: "statusConnectedTitle",
+          detailKey: "statusOutdatedDetail",
+          args: {
+            version: versionLabel(connection.version),
+            expected: versionLabel(expectedVersion),
+          },
         };
       }
-      return { kind: "connected", version: connection.version };
+      return {
+        kind: "connected",
+        version: connection.version,
+        titleKey: "statusConnectedTitle",
+        detailKey: "statusConnectedDetail",
+        args: { version: versionLabel(connection.version) },
+      };
     }
-    return {
-      kind: "disconnected",
-      reason: connection.reason === "unreachable" ? "unreachable" : "not_found",
-    };
+    const reason = connection.reason === "unreachable" ? "unreachable" : "not_found";
+    return { kind: "disconnected", reason, ...collectorCopy(reason) };
   }
 
   function placeholder(
@@ -230,15 +277,10 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
       return placeholder(hostProblem.titleKey, hostProblem.detailKey, true);
     }
     if (connection !== null && !connection.connected) {
-      if (connection.reason === "unreachable") {
-        return placeholder("collectorUnreachableTitle", "collectorUnreachableDetail", true);
-      }
-      return placeholder(
-        "collectorNotRunning",
-        "collectorNotRunningDetail",
-        true,
-        { path: COLLECTOR_INSTALL_PATH },
+      const copy = collectorCopy(
+        connection.reason === "unreachable" ? "unreachable" : "not_found",
       );
+      return placeholder(copy.titleKey, copy.detailKey, true, copy.args);
     }
     if (summaryProblem !== null) {
       return summaryProblem === "timeout"

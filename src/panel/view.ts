@@ -1,7 +1,7 @@
 /**
  * 面板视图：唯一构建 DOM、绑定事件、操作焦点与滚动、订阅模型并渲染
  * `PanelView` 的模块。视图只把用户意图翻译成模型命令，不判断内容优先级、
- * 失败分层、选择规则或预览令牌；这些都由模型负责。
+ * 失败分层、选择规则或预览令牌；状态文案由模型决定，视图只按 key 翻译。
  */
 
 import { mountBadge, mountBanner, mountButton, mountProgress } from "@openchamber/sdk/ui";
@@ -11,7 +11,6 @@ import {
   type Category,
   type SnapshotSummary,
 } from "../shared/types.ts";
-import { COLLECTOR_VERSION } from "../shared/version.ts";
 import {
   breakdownSignature,
   compactNumber,
@@ -32,7 +31,6 @@ import {
   type MapLayout,
 } from "./map.ts";
 import {
-  COLLECTOR_INSTALL_PATH,
   type PanelFocus,
   type PanelModel,
   type PanelState,
@@ -540,40 +538,14 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
 
   function renderStatus(state: PanelState): void {
     statusInline.dataset.state = state.kind;
-    let title: string;
-    let detail: string;
-    let version: string;
-    if (state.kind === "checking") {
-      title = t(currentLocale, "statusCheckingTitle");
-      detail = t(currentLocale, "statusCheckingDetail");
-      version = "…";
-    } else if (state.kind === "connected") {
-      title = t(currentLocale, "statusConnectedTitle", {
-        version: versionLabel(state.version),
-      });
-      detail = state.outdated
-        ? t(currentLocale, "statusOutdatedDetail", {
-          expected: versionLabel(state.expectedVersion ?? COLLECTOR_VERSION),
-        })
-        : t(currentLocale, "statusConnectedDetail");
-      version = versionLabel(state.version);
-    } else if (state.kind === "disconnected") {
-      if (state.reason === "unreachable") {
-        title = t(currentLocale, "collectorUnreachableTitle");
-        detail = t(currentLocale, "collectorUnreachableDetail");
-      } else {
-        title = t(currentLocale, "collectorNotRunning");
-        detail = t(currentLocale, "collectorNotRunningDetail", {
-          path: COLLECTOR_INSTALL_PATH,
-        });
-      }
-      version = "—";
-    } else {
-      title = t(currentLocale, state.titleKey);
-      detail = t(currentLocale, state.detailKey);
-      version = "—";
-    }
+    const version = state.kind === "checking"
+      ? "…"
+      : state.kind === "connected"
+        ? versionLabel(state.version)
+        : "—";
     statusVersion.textContent = version;
+    const title = t(currentLocale, state.titleKey, state.args);
+    const detail = t(currentLocale, state.detailKey, state.args);
     const full = `${title} · ${detail}`;
     statusInline.title = full;
     statusInline.setAttribute("aria-label", full);
@@ -608,20 +580,17 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
 
   function renderVersionBanner(): void {
     const status = view.status;
-    const outdated = status.kind === "connected" && status.outdated === true
-      ? {
-        version: status.version,
-        expectedVersion: status.expectedVersion ?? COLLECTOR_VERSION,
-      }
-      : null;
-    versionSlot.hidden = outdated === null;
-    if (outdated === null) return;
+    if (status.kind !== "connected" || status.outdated !== true) {
+      versionSlot.hidden = true;
+      return;
+    }
+    versionSlot.hidden = false;
     versionBanner.update({
       tone: "warning",
       title: t(currentLocale, "versionOutdatedTitle"),
       body: t(currentLocale, "versionOutdatedBody", {
-        version: versionLabel(outdated.version),
-        expected: versionLabel(outdated.expectedVersion),
+        version: versionLabel(status.version),
+        expected: versionLabel(status.expectedVersion),
       }),
     });
   }
