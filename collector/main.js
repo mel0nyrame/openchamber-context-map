@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 // src/shared/version.ts
-var COLLECTOR_VERSION = "0.1.0";
+var COLLECTOR_VERSION = "0.2.0";
 var DISCOVERY_DIR_ENV = "CONTEXT_MAP_DISCOVERY_DIR";
 
 // src/shared/discovery.ts

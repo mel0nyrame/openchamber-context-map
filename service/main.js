@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 // src/shared/version.ts
-var COLLECTOR_VERSION = "0.1.0";
+var COLLECTOR_VERSION = "0.2.0";
 function normalizeCollectorVersion(value) {
   return value.trim().replace(/^v/i, "");
 }

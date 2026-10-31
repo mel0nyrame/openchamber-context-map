@@ -1,6 +1,6 @@
 {
   "name": "openchamber-context-map",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "OpenChamber 扩展与 OpenCode Collector：查看当前请求的上下文占用",

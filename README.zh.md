@@ -33,7 +33,7 @@ bun run install
 
 - OpenCode 必须完全退出，只关闭窗口不够。Collector 只在进程启动时加载。
 - 在 OpenChamber 的 rail 中打开 **Context Map** 面板。
-- 标题旁的状态圆点为绿色并显示 `v0.1.0`，悬停时显示 `Collector 已连接 · v0.1.0`。如果显示 `Collector 未运行`，确认 OpenCode 确实重启过。
+- 标题旁的状态圆点为绿色并显示 `v0.2.0`，悬停时显示 `Collector 已连接 · v0.2.0`。如果显示 `Collector 未运行`，确认 OpenCode 确实重启过。
 
 默认路径：
 

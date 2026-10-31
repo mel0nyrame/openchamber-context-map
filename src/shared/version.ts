@@ -1,4 +1,4 @@
-export const COLLECTOR_VERSION = "0.1.0";
+export const COLLECTOR_VERSION = "0.2.0";
 
 /** 去掉空白和可选的 `v` 前缀，只用于比较版本是否一致。 */
 export function normalizeCollectorVersion(value: string): string {

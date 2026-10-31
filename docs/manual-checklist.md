@@ -16,7 +16,7 @@
 - [ ] 由用户执行：完全退出 OpenCode（不是只关窗口），再重新打开。
 - [ ] 由用户执行：完全退出 OpenChamber，再重新打开。
 - [ ] 由用户执行：rail 中出现 **Context Map**，打开后能看到面板，而不是空白或一直停在连接中。
-- [ ] 面板标题旁显示状态点与 `v0.1.0`，悬停提示为 `Collector 已连接 · v0.1.0`；没有出现 `Collector 未运行`。
+- [ ] 面板标题旁显示状态点与 `v0.2.0`，悬停提示为 `Collector 已连接 · v0.2.0`；没有出现 `Collector 未运行`。
 - [ ] 全程没有手工复制扩展目录或 Collector 文件。
 
 结果 / 备注：
@@ -112,7 +112,7 @@
 
 ## 6. 升级 Collector 后「版本过旧」提示消失
 
-先确认面板正常、Collector 版本为 `v0.1.0`。真实升级可以用一个旧版本文件模拟；这只是验收手段，`bun run install` 会把它覆盖回当前版本。
+先确认面板正常、Collector 版本为 `v0.2.0`。真实升级可以用一个旧版本文件模拟；这只是验收手段，`bun run install` 会把它覆盖回当前版本。
 
 - [ ] 由用户执行：备份当前 Collector：
 
@@ -120,18 +120,18 @@
   cp ~/.config/opencode/plugins/context-map.js /tmp/context-map.current.js
   ```
 
-- [ ] 由用户执行：生成一个旧版本副本，把标记和代码里的 `0.1.0` 都改成 `0.0.9`：
+- [ ] 由用户执行：生成一个旧版本副本，把标记和代码里的 `0.2.0` 都改成 `0.1.0`：
 
   ```bash
-  sed 's/0\.1\.0/0.0.9/g' /tmp/context-map.current.js > /tmp/context-map.old.js
+  sed 's/0\.2\.0/0.1.0/g' /tmp/context-map.current.js > /tmp/context-map.old.js
   cp /tmp/context-map.old.js ~/.config/opencode/plugins/context-map.js
   ```
 
 - [ ] 由用户执行：完全退出并重新打开 OpenCode。
-- [ ] 面板出现黄色 `collector 版本过旧` 提示，说明运行的是 `v0.0.9`、扩展期望 `v0.1.0`；面板仍能显示已有数据或给出明确降级状态。
-- [ ] 在仓库根目录执行 `bun run install`，输出包含 `已更新：...（0.0.9 -> 0.1.0）`。
+- [ ] 面板出现黄色 `collector 版本过旧` 提示，说明运行的是 `v0.1.0`、扩展期望 `v0.2.0`；面板仍能显示已有数据或给出明确降级状态。
+- [ ] 在仓库根目录执行 `bun run install`，输出包含 `已更新：...（0.1.0 -> 0.2.0）`。
 - [ ] 由用户执行：再次完全退出并重新打开 OpenCode。
-- [ ] 黄色版本提示消失，状态恢复为 `Collector 已连接 · v0.1.0`。
+- [ ] 黄色版本提示消失，状态恢复为 `Collector 已连接 · v0.2.0`。
 - [ ] 删除临时备份 `/tmp/context-map.current.js` 和 `/tmp/context-map.old.js`。
 
 结果 / 备注：

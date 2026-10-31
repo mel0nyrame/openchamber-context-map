@@ -8,6 +8,7 @@ import collector from "../src/collector/main.ts";
 import type { SessionContext } from "../src/collector/opencode.ts";
 import { baselineDraft, buildDraft } from "../src/collector/snapshot.ts";
 import { CATEGORIES, type Category, type SnapshotSummary } from "../src/shared/types.ts";
+import { COLLECTOR_VERSION } from "../src/shared/version.ts";
 
 type HookCallback = (context: SessionContext) => void | Promise<void>;
 
@@ -182,7 +183,7 @@ test("Collector 启动后提供无需鉴权的 /health，并写入 0600 的 disc
 
   const response = await fetch(`http://127.0.0.1:${port}/health`);
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ ok: true, version: "0.1.0" });
+  expect(await response.json()).toEqual({ ok: true, version: COLLECTOR_VERSION });
 });
 
 test("快照按 8 分类统计，并把字符估算缩放到 provider 的 Used", async () => {
