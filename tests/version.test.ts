@@ -7,8 +7,8 @@ import {
 } from "../src/shared/version.ts";
 
 test("Collector 版本比较忽略空白和 v 前缀", () => {
-  expect(normalizeCollectorVersion(" v0.1.0 ")).toBe("0.1.0");
-  expect(collectorVersionOutdated("v0.1.0")).toBe(false);
+  expect(normalizeCollectorVersion(` v${COLLECTOR_VERSION} `)).toBe(COLLECTOR_VERSION);
+  expect(collectorVersionOutdated(`v${COLLECTOR_VERSION}`)).toBe(false);
   expect(collectorVersionOutdated(` ${COLLECTOR_VERSION} `)).toBe(false);
 });
 

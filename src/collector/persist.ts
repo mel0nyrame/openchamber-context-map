@@ -2,7 +2,8 @@ import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "no
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { CATEGORIES, type CategoryUsage, type ItemSummary, type SnapshotSummary } from "../shared/types.ts";
+import { CATEGORIES, type SnapshotSummary } from "../shared/types.ts";
+import { parseSnapshotSummary } from "../shared/snapshot.ts";
 import { DISCOVERY_DIR_ENV } from "../shared/version.ts";
 
 /** 结构变更时加一，旧文件直接丢弃。 */
@@ -32,50 +33,6 @@ export function resolveSnapshotDir(env: NodeJS.ProcessEnv = process.env): string
   return join(homedir(), ".local", "state", "openchamber-context-map", "snapshots");
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function isItemSummary(value: unknown): value is ItemSummary {
-  if (!isRecord(value)) return false;
-  return typeof value.id === "string"
-    && typeof value.title === "string"
-    && isFiniteNumber(value.chars)
-    && typeof value.head === "string";
-}
-
-function isCategoryUsage(value: unknown): value is CategoryUsage {
-  if (!isRecord(value)) return false;
-  return typeof value.category === "string"
-    && (CATEGORIES as readonly string[]).includes(value.category)
-    && isFiniteNumber(value.items)
-    && isFiniteNumber(value.chars)
-    && isFiniteNumber(value.tokens);
-}
-
-function isSnapshotSummary(value: unknown): value is SnapshotSummary {
-  if (!isRecord(value)) return false;
-  return typeof value.sessionID === "string"
-    && value.sessionID.length > 0
-    && typeof value.model === "string"
-    && isFiniteNumber(value.used)
-    && isFiniteNumber(value.window)
-    && typeof value.windowAssumed === "boolean"
-    && typeof value.estimated === "boolean"
-    && typeof value.baseline === "boolean"
-    && typeof value.collectedAt === "string"
-    && Number.isFinite(Date.parse(value.collectedAt))
-    && Array.isArray(value.categories)
-    && value.categories.length === CATEGORIES.length
-    && value.categories.every(isCategoryUsage)
-    && Array.isArray(value.items)
-    && value.items.every(isItemSummary);
-}
-
 function snapshotFileName(sessionID: string): string {
   return `${sessionID.replace(/[^A-Za-z0-9._-]/g, "_")}.json`;
 }
@@ -83,8 +40,13 @@ function snapshotFileName(sessionID: string): string {
 async function readSnapshotFile(file: string): Promise<SnapshotSummary | null> {
   try {
     const value: unknown = JSON.parse(await readFile(file, "utf8"));
-    if (!isRecord(value) || value.schemaVersion !== SNAPSHOT_SCHEMA_VERSION) return null;
-    return isSnapshotSummary(value.summary) ? value.summary : null;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+    const record = value as { schemaVersion?: unknown; summary?: unknown };
+    if (record.schemaVersion !== SNAPSHOT_SCHEMA_VERSION) return null;
+    const summary = parseSnapshotSummary(record.summary);
+    // baseline 汇总只有 2 个分类，但落盘的完整快照必须 8 类齐全。
+    if (!summary || summary.categories.length !== CATEGORIES.length) return null;
+    return summary;
   } catch {
     return null;
   }

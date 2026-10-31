@@ -33,7 +33,7 @@ After installing, **fully quit** OpenCode and OpenChamber, then reopen them:
 
 - OpenCode must exit completely. Closing the window is not enough; the Collector only loads at process start.
 - Open the **Context Map** panel from the rail in OpenChamber.
-- The status dot next to the title is green and shows `v0.1.0`; hovering it reads `Collector connected · v0.1.0`. If it says `Collector is not running`, confirm that OpenCode was actually restarted.
+- The status dot next to the title is green and shows `v0.2.0`; hovering it reads `Collector connected · v0.2.0`. If it says `Collector is not running`, confirm that OpenCode was actually restarted.
 
 Default paths:
 

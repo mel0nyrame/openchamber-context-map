@@ -2,13 +2,14 @@ import { randomBytes } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
 
 import { removeDiscovery, resolveDiscoveryDir, writeDiscovery } from "../shared/discovery.ts";
-import type { DiscoveryRecord, SnapshotItemDetail } from "../shared/types.ts";
+import type { DiscoveryRecord } from "../shared/types.ts";
 import { COLLECTOR_VERSION } from "../shared/version.ts";
-import { BaselineStore, baselineSummary, type BaselineTemplate } from "./baseline.ts";
+import { BaselineStore } from "./baseline.ts";
 import { enrichSnapshot, WindowResolver } from "./enrich.ts";
-import { modelRefID, type PluginContext, type SessionContext, type SessionInfo } from "./opencode.ts";
+import type { PluginContext, SessionContext, SessionInfo } from "./opencode.ts";
 import { persistenceEnabled, readSnapshots, resolveSnapshotDir, SnapshotWriter } from "./persist.ts";
-import { baselineDraft, buildDraft, DEFAULT_WINDOW } from "./snapshot.ts";
+import { SnapshotResolver } from "./resolver.ts";
+import { baselineDraft, buildDraft } from "./snapshot.ts";
 import { SnapshotStore } from "./store.ts";
 
 interface CollectorPlugin {
@@ -55,6 +56,24 @@ const collector: CollectorPlugin = {
     const store = new SnapshotStore();
     const baselines = new BaselineStore();
     const windows = new WindowResolver(context);
+    const resolver = new SnapshotResolver({
+      store,
+      baselines,
+      loadSession: async (sessionID) => {
+        const get = context.session?.get;
+        if (!get) return null;
+        try {
+          const info = (await get.call(context.session, { sessionID })) as
+            | SessionInfo
+            | null
+            | undefined;
+          return info ?? null;
+        } catch {
+          return null;
+        }
+      },
+      resolveWindow: (ref) => windows.resolve(ref),
+    });
     const persistDir = persistenceEnabled() ? resolveSnapshotDir() : null;
     const writer = new SnapshotWriter(persistDir);
     if (persistDir) {
@@ -79,24 +98,6 @@ const collector: CollectorPlugin = {
             .catch(() => {});
         })
       : null;
-
-    /** 真实快照出现前，用当前 session 的 agent + model 找最近一次请求的模板。 */
-    const resolveBaselineTemplate = async (sessionID: string): Promise<BaselineTemplate | null> => {
-      const get = context.session?.get;
-      if (!get) return null;
-      let info: SessionInfo | null | undefined;
-      try {
-        info = (await get.call(context.session, { sessionID })) as SessionInfo | null | undefined;
-      } catch {
-        return null;
-      }
-      const agent = typeof info?.agent === "string" ? info.agent : "";
-      const ref = info?.model;
-      if (!agent || !ref || typeof ref.providerID !== "string" || !modelRefID(ref)) {
-        return null;
-      }
-      return baselines.get(agent, ref) ?? null;
-    };
 
     const server = createServer(async (request, response) => {
       try {
@@ -126,43 +127,21 @@ const collector: CollectorPlugin = {
             return;
           }
 
-          const record = store.get(sessionID);
-
           if (path === "/summary") {
-            if (record) {
-              sendJson(response, 200, record.summary);
-              return;
-            }
-            const template = await resolveBaselineTemplate(sessionID);
-            if (!template) {
+            const summary = await resolver.resolveSummary(sessionID);
+            if (!summary) {
               sendJson(response, 404, { error: "not_found" });
               return;
             }
-            const resolved = await windows
-              .resolve(template.modelRef)
-              .catch(() => ({ window: DEFAULT_WINDOW, assumed: true }));
-            sendJson(
-              response,
-              200,
-              baselineSummary(template, sessionID, resolved.window, resolved.assumed),
-            );
+            sendJson(response, 200, summary);
             return;
           }
 
-          const items = record
-            ? record.draft?.items
-            : (await resolveBaselineTemplate(sessionID))?.items;
-          const item = items?.find((candidate) => candidate.id === itemId);
-          if (!item) {
+          const detail = await resolver.resolveItem(sessionID, itemId ?? "");
+          if (!detail) {
             sendJson(response, 404, { error: "not_found" });
             return;
           }
-          const detail: SnapshotItemDetail = {
-            id: item.id,
-            title: item.title,
-            chars: item.chars,
-            text: item.text,
-          };
           sendJson(response, 200, detail);
           return;
         }
