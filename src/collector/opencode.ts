@@ -3,10 +3,23 @@
  * 只声明采集器真正读取的字段，避免把宿主 SDK 拖进构建产物。
  */
 
+/**
+ * OpenCode 2.2 的 Model.Ref 是 `{ id, providerID, variant? }`；
+ * `modelID` 只在 Model.Info 与旧开发夹具里出现。
+ */
 export interface ModelRef {
+  id?: string;
   providerID: string;
-  modelID: string;
+  modelID?: string;
   variant?: string;
+}
+
+/** 请求里的 model 是 Ref（用 id），session.get 与夹具可能给 modelID。 */
+export function modelRefID(ref: ModelRef | null | undefined): string {
+  if (!ref) return "";
+  if (typeof ref.id === "string" && ref.id) return ref.id;
+  if (typeof ref.modelID === "string" && ref.modelID) return ref.modelID;
+  return "";
 }
 
 export interface SystemPart {
@@ -68,6 +81,7 @@ export interface SessionMessageInfo {
 }
 
 export interface ModelInfo {
+  id?: string;
   providerID?: string;
   modelID?: string;
   name?: string;
