@@ -710,7 +710,9 @@ function renderContent(next: PanelView): void {
     body.args === undefined
       ? t(currentLocale, body.titleKey)
       : t(currentLocale, body.titleKey, body.args),
-    t(currentLocale, body.detailKey),
+    body.args === undefined
+      ? t(currentLocale, body.detailKey)
+      : t(currentLocale, body.detailKey, body.args),
     body.retry,
   );
 }
