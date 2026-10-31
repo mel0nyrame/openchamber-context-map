@@ -16,7 +16,6 @@ import {
   resolveLocale,
   t,
   type Locale,
-  type MessageKey,
 } from "./i18n.ts";
 import {
   COMPACT_COLUMNS,
@@ -31,6 +30,12 @@ import {
   type MapCell,
   type MapLayout,
 } from "./map.ts";
+import {
+  COLLECTOR_INSTALL_PATH,
+  createPanelModel,
+  type PanelState,
+  type PanelView,
+} from "./model.ts";
 import { paletteCss } from "./palette.ts";
 import {
   PREVIEW_MAX_CHARS,
@@ -44,7 +49,6 @@ import {
 import {
   createRefreshController,
   type RefreshRunContext,
-  type RefreshView,
 } from "./refresh.ts";
 
 const STYLE = `
@@ -171,14 +175,6 @@ const STYLE = `
   .placeholder-actions { margin-top: 6px; }
   [hidden] { display: none !important; }
 `;
-
-const COLLECTOR_INSTALL_PATH = "~/.config/opencode/plugins/";
-
-type PanelState =
-  | { kind: "checking" }
-  | { kind: "connected"; version: string; outdated?: boolean; expectedVersion?: string }
-  | { kind: "disconnected"; reason: "not_found" | "unreachable" }
-  | { kind: "failed"; titleKey: MessageKey; detailKey: MessageKey };
 
 interface HealthBody {
   collector?: {
@@ -422,26 +418,17 @@ placeholder.append(placeholderTitle, placeholderDetail, placeholderActions);
 
 root.append(bannerSlot, versionSlot, usage, mapCard, breakdownCard, placeholder);
 
-let panelState: PanelState = { kind: "checking" };
-let session: SessionSnapshot | null = null;
-let connected = false;
-let summary: SnapshotSummary | null = null;
-type SummaryProblem = "timeout" | "other";
-let summaryProblem: SummaryProblem | null = null;
-let hostProblem: HostFailureCopy | null = null;
-let collectorReason: "not_found" | "unreachable" | null = null;
-let collectorOutdated: { version: string; expectedVersion: string } | null = null;
-
-let refreshView: RefreshView;
+const model = createPanelModel();
+let view: PanelView = model.getView();
 const refreshController = createRefreshController({
   visible: document.visibilityState !== "hidden",
   run: (context) => refreshOnce(context),
-  onChange: (view) => {
-    refreshView = view;
-    syncRetryControls();
-  },
+  onChange: (next) => model.setRefresh(next),
 });
-refreshView = refreshController.getView();
+model.subscribe((next) => {
+  view = next;
+  renderView(next);
+});
 
 interface CellTarget {
   cell: MapCell;
@@ -566,18 +553,20 @@ window.addEventListener("resize", () => {
   refreshTooltip();
 });
 
-renderStatus({ kind: "checking" });
-showPlaceholder(
-  t(currentLocale, "connectingTitle"),
-  t(currentLocale, "connectingDetail"),
-);
+renderView(view);
+model.setRefresh(refreshController.getView());
 
 function versionLabel(version: string): string {
   return version.startsWith("v") ? version : `v${version}`;
 }
 
+function renderView(next: PanelView): void {
+  renderStatus(next.status);
+  renderContent(next);
+  syncRetryControls();
+}
+
 function renderStatus(state: PanelState): void {
-  panelState = state;
   statusInline.dataset.state = state.kind;
   let title: string;
   let detail: string;
@@ -640,7 +629,7 @@ function renderStaticCopy(): void {
   previewBody.setAttribute("aria-label", t(currentLocale, "previewBodyAria"));
   renderVersionBanner();
   renderRefreshBanner();
-  renderStatus(panelState);
+  renderStatus(view.status);
   mapSignature = null;
 }
 
@@ -658,14 +647,25 @@ function isBlockingHostFailure(error: unknown): boolean {
 }
 
 function renderVersionBanner(): void {
-  versionSlot.hidden = collectorOutdated === null;
-  if (collectorOutdated === null) return;
+  // 版本提示跟随连接结果，而不是状态条：非阻断 host 错误会把状态条改成
+  // failed，但已有内容（包括过期版本提示）应继续保留。
+  const connection = view.connection;
+  const outdated = connection?.connected === true
+    && connection.outdated === true
+    && typeof connection.version === "string"
+    ? {
+      version: connection.version,
+      expectedVersion: connection.expectedVersion ?? COLLECTOR_VERSION,
+    }
+    : null;
+  versionSlot.hidden = outdated === null;
+  if (outdated === null) return;
   versionBanner.update({
     tone: "warning",
     title: t(currentLocale, "versionOutdatedTitle"),
     body: t(currentLocale, "versionOutdatedBody", {
-      version: versionLabel(collectorOutdated.version),
-      expected: versionLabel(collectorOutdated.expectedVersion),
+      version: versionLabel(outdated.version),
+      expected: versionLabel(outdated.expectedVersion),
     }),
   });
 }
@@ -698,69 +698,23 @@ function showPlaceholder(headline: string, detail: string, retry = false): void 
   syncRetryControls();
 }
 
-function renderContent(): void {
-  renderUpdated();
+function renderContent(next: PanelView): void {
+  renderUpdated(next.summary);
   renderVersionBanner();
-  if (!refreshView.hasLoaded) {
-    showPlaceholder(
-      t(currentLocale, "connectingTitle"),
-      t(currentLocale, "connectingDetail"),
-    );
+  const body = next.body;
+  if (body.kind === "summary") {
+    renderSummary(body.summary);
     return;
   }
-  if (!session) {
-    showPlaceholder(
-      t(currentLocale, "noSessionTitle"),
-      t(currentLocale, "noSessionDetail"),
-      true,
-    );
-    return;
-  }
-  if (hostProblem !== null) {
-    showPlaceholder(
-      t(currentLocale, hostProblem.titleKey),
-      t(currentLocale, hostProblem.detailKey),
-      true,
-    );
-    return;
-  }
-  if (!connected) {
-    if (collectorReason === "unreachable") {
-      showPlaceholder(
-        t(currentLocale, "collectorUnreachableTitle"),
-        t(currentLocale, "collectorUnreachableDetail"),
-        true,
-      );
-    } else {
-      showPlaceholder(
-        t(currentLocale, "collectorNotRunning"),
-        t(currentLocale, "collectorNotRunningDetail", { path: COLLECTOR_INSTALL_PATH }),
-        true,
-      );
-    }
-    return;
-  }
-  if (summaryProblem !== null) {
-    showPlaceholder(
-      summaryProblem === "timeout"
-        ? t(currentLocale, "summaryTimeoutTitle")
-        : t(currentLocale, "summaryUnavailableTitle"),
-      summaryProblem === "timeout"
-        ? t(currentLocale, "summaryTimeoutDetail")
-        : t(currentLocale, "summaryUnavailableDetail"),
-      true,
-    );
-    return;
-  }
-  if (!summary || summary.sessionID !== session.id) {
-    showPlaceholder(
-      t(currentLocale, "waitingForFirstRequestTitle"),
-      t(currentLocale, "waitingForFirstRequestDetail"),
-      true,
-    );
-    return;
-  }
-  renderSummary(summary);
+  showPlaceholder(
+    body.args === undefined
+      ? t(currentLocale, body.titleKey)
+      : t(currentLocale, body.titleKey, body.args),
+    body.args === undefined
+      ? t(currentLocale, body.detailKey)
+      : t(currentLocale, body.detailKey, body.args),
+    body.retry,
+  );
 }
 
 function formatNumber(value: number): string {
@@ -783,8 +737,8 @@ function pad2(value: number): string {
 }
 
 /** 「更新于」只显示快照的采集时间，不用本地当前时间冒充。 */
-function renderUpdated(): void {
-  const collectedAt = summary?.collectedAt ?? null;
+function renderUpdated(next: SnapshotSummary | null): void {
+  const collectedAt = next?.collectedAt ?? null;
   if (collectedAt === null) {
     updated.hidden = true;
     updated.textContent = "";
@@ -795,7 +749,7 @@ function renderUpdated(): void {
   const date = new Date(collectedAt);
   if (Number.isNaN(date.getTime())) {
     updated.hidden = false;
-    updated.textContent = summary?.restored
+    updated.textContent = next?.restored
       ? `${collectedAt}${t(currentLocale, "restoredSuffix")}`
       : collectedAt;
     updated.title = collectedAt;
@@ -815,7 +769,7 @@ function renderUpdated(): void {
       day: date.getDate(),
       clock,
     });
-  updated.textContent = summary?.restored
+  updated.textContent = next?.restored
     ? `${label}${t(currentLocale, "restoredSuffix")}`
     : label;
   updated.title = t(currentLocale, "collectedAtTitle", {
@@ -863,9 +817,10 @@ function renderZoomLabel(next: SnapshotSummary): void {
 
 function toggleZoom(): void {
   zoom = zoom === "window" ? "fit" : "window";
-  if (!summary) return;
+  const current = view.summary;
+  if (!current) return;
   mapSignature = null;
-  renderSummary(summary);
+  renderSummary(current);
 }
 
 function roundPercent(value: number): string {
@@ -1035,8 +990,9 @@ function hideTooltip(): void {
 }
 
 function currentItems(): ItemSummary[] {
-  if (!summary || !selectedCategory) return [];
-  return itemsForCategory(summary.items, selectedCategory);
+  const current = view.summary;
+  if (!current || !selectedCategory) return [];
+  return itemsForCategory(current.items, selectedCategory);
 }
 
 function focusItemAt(index: number): void {
@@ -1140,11 +1096,12 @@ function renderBreakdown(): void {
 
   breakdownBody.replaceChildren();
   itemButtons = [];
-  if (!summary || !currentLayout) {
+  const current = view.summary;
+  if (!current || !currentLayout) {
     backButton.hidden = true;
     return;
   }
-  const breakdown = buildBreakdown(summary.categories, summary.used, summary.window);
+  const breakdown = buildBreakdown(current.categories, current.used, current.window);
   backButton.hidden = !selectedCategory && !preview;
 
   if (preview) {
@@ -1164,7 +1121,7 @@ function renderBreakdown(): void {
   if (selectedCategory) {
     const category = selectedCategory;
     const row = breakdown.rows.find((entry) => entry.category === category);
-    const items = itemsForCategory(summary.items, category);
+    const items = itemsForCategory(current.items, category);
 
     const drill = document.createElement("div");
     drill.className = "drill-head";
@@ -1257,7 +1214,7 @@ function renderBreakdown(): void {
   freeName.textContent = t(currentLocale, "freeSpace");
   const freeMeta = document.createElement("span");
   freeMeta.className = "row-meta";
-  const bar = windowBar(summary.used, summary.window);
+  const bar = windowBar(current.used, current.window);
   const freeTokens = t(currentLocale, "tokenCount", { tokens: formatNumber(bar.free) });
   freeMeta.textContent = bar.over
     ? `${freeTokens} · ${t(currentLocale, "overWindow")}`
@@ -1297,8 +1254,8 @@ function renderPreview(state: PreviewState): void {
 
 async function openPreview(entry: ItemSummary): Promise<void> {
   const category = categoryOfItem(entry.id) ?? selectedCategory;
-  const current = session;
-  if (!category || !current) return;
+  const currentSessionID = view.sessionID;
+  if (!category || currentSessionID === null) return;
 
   const request = ++previewRequest;
   focusedItemId = entry.id;
@@ -1321,13 +1278,13 @@ async function openPreview(entry: ItemSummary): Promise<void> {
     const result = await host.serviceRequest({
       method: "GET",
       path: "/item",
-      query: { sessionID: current.id, itemId: entry.id },
+      query: { sessionID: currentSessionID, itemId: entry.id },
     });
     if (request !== previewRequest || preview?.itemId !== entry.id) return;
-    if (session?.id !== current.id) return;
+    if (view.sessionID !== currentSessionID) return;
 
     if (result.status === 404) {
-      if (summary?.restored) {
+      if (view.summary?.restored) {
         // 恢复的快照只有骨架；刷新也只会拿回同一份，直接说明原因。
         preview = {
           ...preview,
@@ -1505,41 +1462,38 @@ function parseSummary(body: string): SnapshotSummary | null {
   }
 }
 
-function setSession(next: SessionSnapshot | null): void {
-  const previous = session?.id ?? null;
-  session = next;
+function applySession(next: SessionSnapshot | null): void {
+  const previous = view.sessionID;
   const nextID = next?.id ?? null;
+  const busy = next?.busy ?? false;
 
-  if (nextID === previous) {
-    refreshController.setSession(nextID, next?.busy ?? false);
-    return;
+  if (nextID !== previous) {
+    // 旧 session 的数据先清掉，再让控制器作废旧请求并决定是否拉新的一份。
+    selectedCategory = null;
+    mapSignature = null;
+    currentLayout = null;
+    cellElements.clear();
+    hoveredCell = null;
+    pinnedCell = null;
+    preview = null;
+    previewRequest += 1;
+    focusedItemId = null;
+    focusedItemFallback = 0;
+    itemButtons = [];
+    notice = null;
+    resetCopyFeedback();
+    breakdownBody.replaceChildren();
+    hideTooltip();
   }
 
-  // 旧 session 的数据先清掉，再让控制器作废旧请求并决定是否拉新的一份。
-  summary = null;
-  summaryProblem = null;
-  selectedCategory = null;
-  mapSignature = null;
-  currentLayout = null;
-  cellElements.clear();
-  hoveredCell = null;
-  pinnedCell = null;
-  preview = null;
-  previewRequest += 1;
-  focusedItemId = null;
-  focusedItemFallback = 0;
-  itemButtons = [];
-  notice = null;
-  resetCopyFeedback();
-  breakdownBody.replaceChildren();
-  hideTooltip();
-  refreshController.setSession(nextID, next?.busy ?? false);
-  renderContent();
+  model.setSession(nextID, busy);
+  refreshController.setSession(nextID, busy);
   if (nextID !== null) refreshController.refresh("event");
 }
 
 function renderRefreshBanner(): void {
-  const next = refreshView.banner;
+  const refresh = view.refresh;
+  const next = refresh.banner;
   bannerSlot.hidden = next === null;
   if (next !== null) {
     // 请求在途时收起 banner 的重试入口，避免和顶部/占位区按钮重复触发。
@@ -1547,7 +1501,7 @@ function renderRefreshBanner(): void {
       tone: next.tone,
       title: t(currentLocale, next.titleKey),
       body: t(currentLocale, next.bodyKey),
-      action: refreshView.manualLoading || refreshView.inFlight
+      action: refresh.manualLoading || refresh.inFlight
         ? undefined
         : { label: t(currentLocale, "retry"), onClick: () => manualRefresh() },
     });
@@ -1555,12 +1509,13 @@ function renderRefreshBanner(): void {
 }
 
 function syncRetryControls(): void {
-  const busy = refreshView.manualLoading || refreshView.inFlight;
-  refreshButton.update({ disabled: busy, loading: refreshView.manualLoading });
+  const refresh = view.refresh;
+  const busy = refresh.manualLoading || refresh.inFlight;
+  refreshButton.update({ disabled: busy, loading: refresh.manualLoading });
   placeholderRetry.update({
     disabled: busy,
-    loading: refreshView.manualLoading,
-    label: refreshView.manualLoading ? t(currentLocale, "retrying") : t(currentLocale, "retry"),
+    loading: refresh.manualLoading,
+    label: refresh.manualLoading ? t(currentLocale, "retrying") : t(currentLocale, "retry"),
   });
   renderRefreshBanner();
 }
@@ -1575,30 +1530,21 @@ function noteUnreachable(
   error: unknown,
   unexpected = false,
 ): void {
+  const copy = unexpected
+    ? { titleKey: "unexpectedServiceTitle" as const, detailKey: "unexpectedServiceDetail" as const }
+    : failureOf(error);
+
   // 已经有数据时静默保留内容，连续失败由 banner 统一提示；
   // 但连接指示必须诚实反映当前 host / Service 状态。
-  if (!isBlockingHostFailure(error) && (summary !== null || connected)) {
-    const copy = unexpected
-      ? { titleKey: "unexpectedServiceTitle" as const, detailKey: "unexpectedServiceDetail" as const }
-      : failureOf(error);
-    renderStatus({ kind: "failed", titleKey: copy.titleKey, detailKey: copy.detailKey });
+  if (!isBlockingHostFailure(error) && (view.summary !== null || view.connection?.connected === true)) {
+    model.setHostProblem(copy, { keepContent: true });
     return;
   }
 
-  connected = false;
-  summaryProblem = null;
-  collectorReason = null;
-  collectorOutdated = null;
-  hostProblem = unexpected
-    ? { titleKey: "unexpectedServiceTitle", detailKey: "unexpectedServiceDetail" }
-    : failureOf(error);
+  model.setHostProblem(copy);
+  model.setConnection(null);
+  model.setSummary(null);
   context.markLoaded();
-  renderStatus({
-    kind: "failed",
-    titleKey: hostProblem.titleKey,
-    detailKey: hostProblem.detailKey,
-  });
-  renderContent();
 }
 
 /** 拉一次 /health 和当前 session 的 /summary；返回这次刷新是否成功。 */
@@ -1627,32 +1573,24 @@ async function refreshOnce(context: RefreshRunContext): Promise<boolean> {
   }
 
   const collector = body.collector;
-  hostProblem = null;
+  model.setHostProblem(null);
   if (collector.connected !== true || typeof collector.version !== "string") {
-    connected = false;
-    summary = null;
-    summaryProblem = null;
-    collectorOutdated = null;
-    collectorReason = collector.reason === "unreachable" ? "unreachable" : "not_found";
+    const reason = collector.reason === "unreachable" ? "unreachable" : "not_found";
+    model.setConnection({ connected: false, reason });
+    model.setSummary(null);
     context.markLoaded();
-    renderStatus({ kind: "disconnected", reason: collectorReason });
-    renderContent();
     return true;
   }
 
-  connected = true;
-  collectorReason = null;
   const expectedVersion = typeof collector.expectedVersion === "string"
     ? collector.expectedVersion
     : COLLECTOR_VERSION;
-  collectorOutdated = collector.outdated === true
-    ? { version: collector.version, expectedVersion }
-    : null;
-  renderStatus({
-    kind: "connected",
+  const outdated = collector.outdated === true;
+  model.setConnection({
+    connected: true,
     version: collector.version,
-    outdated: collectorOutdated !== null,
-    expectedVersion: collectorOutdated?.expectedVersion,
+    outdated,
+    expectedVersion: outdated ? expectedVersion : undefined,
   });
 
   try {
@@ -1668,51 +1606,43 @@ async function refreshOnce(context: RefreshRunContext): Promise<boolean> {
       const parsed = parseSummary(result.body);
       if (parsed === null) {
         if (!quiet) {
-          summaryProblem = summary === null ? "other" : null;
+          model.setSummaryProblem(model.getView().summary === null ? "other" : null);
           context.markLoaded();
-          renderContent();
         }
         return false;
       }
-      summary = parsed;
-      summaryProblem = null;
+      model.setSummary(parsed);
     } else if (result.status === 404) {
-      summary = null;
-      summaryProblem = null;
+      model.setSummary(null);
     } else if (result.status === 503) {
       // 503 只表示没有可用的 Collector：按连接状态处理，而不是超时。
-      connected = false;
-      summary = null;
-      summaryProblem = null;
-      collectorReason = "not_found";
+      model.setConnection({ connected: false, reason: "not_found" });
+      model.setSummary(null);
       context.markLoaded();
-      renderStatus({ kind: "disconnected", reason: "not_found" });
-      renderContent();
       return false;
     } else {
       if (!quiet) {
-        summaryProblem = result.status === 504
-          ? "timeout"
-          : summary === null
-            ? "other"
-            : null;
+        model.setSummaryProblem(
+          result.status === 504
+            ? "timeout"
+            : model.getView().summary === null
+              ? "other"
+              : null,
+        );
         context.markLoaded();
-        renderContent();
       }
       return false;
     }
   } catch {
     if (!context.isCurrent()) return true;
     if (!quiet) {
-      summaryProblem = summary === null ? "other" : null;
+      model.setSummaryProblem(model.getView().summary === null ? "other" : null);
       context.markLoaded();
-      renderContent();
     }
     return false;
   }
 
   context.markLoaded();
-  renderContent();
   return true;
 }
 
@@ -1729,7 +1659,7 @@ window.addEventListener("pageshow", () => {
 });
 
 host.onSession((next) => {
-  setSession(next);
+  applySession(next);
 });
 
 host.onSessionLifecycle((event) => {
@@ -1743,9 +1673,9 @@ host.onReady((context) => {
   if (locale !== currentLocale) {
     currentLocale = locale;
     renderStaticCopy();
-    renderContent();
   }
-  setSession(context.session);
+  model.setBooted(true);
+  applySession(context.session);
   refreshController.start();
 });
 
