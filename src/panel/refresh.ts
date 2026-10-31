@@ -1,7 +1,7 @@
 /**
  * 刷新生命周期：启动、轮询、手动重试、会话切换、可见性、失败停轮和旧响应丢弃。
  * 纯状态函数描述单步转换；`createRefreshController` 把它们和计时器、在途请求、
- * 排队、代次令牌组合起来。模块不碰 DOM，计时器和可见性都由外部注入。
+ * 排队、代次令牌组合起来。模块不碰 DOM；计时器和初始可见性都由外部注入。
  */
 
 import type { MessageKey } from "./i18n.ts";
@@ -153,8 +153,6 @@ export interface RefreshView {
   inFlight: boolean;
   manualLoading: boolean;
   hasLoaded: boolean;
-  /** 由 `state` 推导出的失败提示，面板直接渲染。 */
-  banner: RefreshBanner | null;
 }
 
 export interface RefreshControllerDeps {
@@ -164,8 +162,8 @@ export interface RefreshControllerDeps {
   onChange(view: RefreshView): void;
   setTimer?(callback: () => void, delay: number): unknown;
   clearTimer?(handle: unknown): void;
-  /** 初始可见性；默认读取宿主文档，读不到时按可见处理。 */
-  visible?: boolean;
+  /** 初始可见性；由入口读取宿主文档后注入。 */
+  visible: boolean;
 }
 
 export interface RefreshController {
@@ -178,17 +176,13 @@ export interface RefreshController {
   getView(): RefreshView;
 }
 
-function defaultVisible(): boolean {
-  return typeof document === "undefined" || document.visibilityState !== "hidden";
-}
-
 export function createRefreshController(deps: RefreshControllerDeps): RefreshController {
   const setTimer = deps.setTimer
     ?? ((callback: () => void, delay: number): unknown => setTimeout(callback, delay));
   const clearTimer = deps.clearTimer
     ?? ((handle: unknown): void => clearTimeout(handle as ReturnType<typeof setTimeout>));
 
-  let state = initialRefreshState(deps.visible ?? defaultVisible());
+  let state = initialRefreshState(deps.visible);
   let started = false;
   let disposed = false;
   let inFlight = false;
@@ -200,7 +194,7 @@ export function createRefreshController(deps: RefreshControllerDeps): RefreshCon
   let timer: unknown = null;
 
   function snapshot(): RefreshView {
-    return { state, inFlight, manualLoading, hasLoaded, banner: refreshBanner(state) };
+    return { state, inFlight, manualLoading, hasLoaded };
   }
 
   function notify(): void {

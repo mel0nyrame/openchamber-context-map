@@ -82,12 +82,7 @@ export interface PanelView {
   status: PanelState;
   body: PanelBody;
   sessionID: string | null;
-  busy: boolean;
-  booted: boolean;
-  connection: CollectorStatus | null;
   summary: SnapshotSummary | null;
-  summaryProblem: SummaryProblem | null;
-  hostProblem: HostFailureCopy | null;
   refresh: RefreshView;
   selectedCategory: Category | null;
   layer: PanelLayer;
@@ -98,14 +93,6 @@ export interface PanelView {
   preview: PreviewState | null;
   focus: PanelFocus;
   notice: MessageKey | null;
-}
-
-export interface HostProblemOptions {
-  /**
-   * 已有数据时的非阻断 host 错误：只把状态条改为 failed，不替换正文。
-   * 这是现有 `noteUnreachable` 的「保留内容」路径。
-   */
-  keepContent?: boolean;
 }
 
 /** `loadItem` 的判别结果；模型只认识这五种情况，不接触 HTTP。 */
@@ -127,7 +114,8 @@ export interface PanelModel {
   setBooted(booted: boolean): void;
   setSession(sessionID: string | null, busy: boolean): void;
   setConnection(status: CollectorStatus | null): void;
-  setHostProblem(problem: HostFailureCopy | null, options?: HostProblemOptions): void;
+  /** 返回这次错误是否阻断了正文，供刷新流程决定是否标记已加载。 */
+  setHostProblem(problem: HostFailureCopy | null): boolean;
   setSummary(summary: SnapshotSummary | null): void;
   setSummaryProblem(problem: SummaryProblem | null): void;
   setRefresh(view: RefreshView): void;
@@ -144,20 +132,20 @@ export interface PanelModel {
 }
 
 function initialRefresh(): RefreshView {
-  const state = initialRefreshState();
   return {
-    state,
+    state: initialRefreshState(),
     inFlight: false,
     manualLoading: false,
     hasLoaded: false,
-    banner: null,
   };
 }
 
 function sameCopy(a: HostFailureCopy | null, b: HostFailureCopy | null): boolean {
   if (a === b) return true;
   if (a === null || b === null) return false;
-  return a.titleKey === b.titleKey && a.detailKey === b.detailKey;
+  return a.titleKey === b.titleKey
+    && a.detailKey === b.detailKey
+    && a.blocking === b.blocking;
 }
 
 function sameConnection(a: CollectorStatus | null, b: CollectorStatus | null): boolean {
@@ -276,7 +264,7 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
     return itemsForCategory(current.items, selectedCategory);
   }
 
-  /** 与入口原来的 `mapDenominator` 保持一致。 */
+  /** fit 口径按已用量留出余量，并且不超过真实窗口。 */
   function denominatorFor(current: SnapshotSummary): number {
     const fit = Math.min(
       current.window > 0 ? current.window : Number.POSITIVE_INFINITY,
@@ -333,12 +321,7 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
       status: status(),
       body: body(),
       sessionID,
-      busy,
-      booted,
-      connection,
       summary,
-      summaryProblem,
-      hostProblem,
       refresh,
       selectedCategory,
       layer: layerOf(selectedCategory, preview?.itemId ?? null),
@@ -411,15 +394,27 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
       notify();
     },
 
-    setHostProblem(problem, options = {}) {
-      const keepContent = problem !== null && options.keepContent === true;
-      const nextHost = keepContent ? null : problem;
+    setHostProblem(problem) {
+      // 非阻断错误只在已有内容时保留正文；没有内容可保留时仍按阻断处理。
+      const keepContent = problem !== null
+        && !problem.blocking
+        && (summary !== null || connection?.connected === true);
+      const nextHost = problem !== null && !keepContent ? problem : null;
       const nextStatus = problem;
-      if (sameCopy(hostProblem, nextHost) && sameCopy(statusFailure, nextStatus)) return;
+      if (sameCopy(hostProblem, nextHost) && sameCopy(statusFailure, nextStatus)) {
+        return hostProblem !== null;
+      }
       hostProblem = nextHost;
       statusFailure = nextStatus;
+      if (nextHost !== null) {
+        // 阻断性 host 错误已经让连接与摘要不可信，正文只保留错误本身。
+        connection = null;
+        summary = null;
+        summaryProblem = null;
+      }
       reconcileContent();
       notify();
+      return hostProblem !== null;
     },
 
     setSummary(next) {
@@ -466,21 +461,21 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
       const current = activeSummary();
       const requestSession = sessionID;
       if (current === null || requestSession === null) return;
-      const entry = current.items.find((item) => item.id === itemId);
-      if (entry === undefined) return;
-      const category = categoryOfItem(entry.id) ?? selectedCategory;
+      const item = current.items.find((candidate) => candidate.id === itemId);
+      if (item === undefined) return;
+      const category = categoryOfItem(item.id) ?? selectedCategory;
       if (category === null) return;
 
       const request = ++previewToken;
-      const index = currentItems().findIndex((item) => item.id === entry.id);
-      focusItemId = entry.id;
+      const index = currentItems().findIndex((candidate) => candidate.id === item.id);
+      focusItemId = item.id;
       focusItemFallback = index >= 0 ? index : 0;
       notice = null;
       preview = {
-        itemId: entry.id,
+        itemId: item.id,
         category,
-        title: entry.title,
-        chars: entry.chars,
+        title: item.title,
+        chars: item.chars,
         text: "",
         loading: true,
         error: null,
@@ -490,25 +485,25 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
 
       let result: ItemLoadResult;
       try {
-        result = await loadItem(requestSession, entry.id);
+        result = await loadItem(requestSession, item.id);
       } catch {
-        if (request !== previewToken || sessionID !== requestSession || preview?.itemId !== entry.id) {
+        if (request !== previewToken || sessionID !== requestSession || preview?.itemId !== item.id) {
           return;
         }
         setPreviewError("previewReadError");
         return;
       }
 
-      if (request !== previewToken || sessionID !== requestSession || preview?.itemId !== entry.id) {
+      if (request !== previewToken || sessionID !== requestSession || preview?.itemId !== item.id) {
         return;
       }
 
       if (result.kind === "ok") {
         const text = clipPreviewText(result.detail.text);
         preview = {
-          itemId: entry.id,
+          itemId: item.id,
           category,
-          title: result.detail.title || entry.title,
+          title: result.detail.title || item.title,
           chars: result.detail.chars,
           text,
           loading: false,
@@ -527,7 +522,7 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
         preview = null;
         previewToken += 1;
         notice = "previewMissingNotice";
-        focusItemId = entry.id;
+        focusItemId = item.id;
         focusItemFallback = index >= 0 ? index : 0;
         notify();
         onPreviewMissing();

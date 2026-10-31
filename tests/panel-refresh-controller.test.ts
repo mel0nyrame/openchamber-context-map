@@ -147,7 +147,6 @@ describe("控制器启动", () => {
       inFlight: false,
       manualLoading: false,
       hasLoaded: false,
-      banner: null,
     });
   });
 });

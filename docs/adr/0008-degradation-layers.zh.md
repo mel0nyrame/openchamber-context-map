@@ -16,4 +16,4 @@ Collector 版本过旧只提示，不自动更新。Collector 是用户复制进
 
 **Consequences**
 
-文案分散在 `src/panel/failure.ts`（host 失败）与 `src/panel/main.ts` 的状态分支（Collector 与请求失败）。新增错误码时，Service 的映射与面板的分层要一起改；只改一处会让状态码落到「意外结果」。
+文案分散在 `src/panel/failure.ts`（host 失败）与面板模型的内容状态（`src/panel/model.ts`，Collector 与请求失败）。新增错误码时，Service 的映射与面板的分层要一起改；只改一处会让状态码落到「意外结果」。
