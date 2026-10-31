@@ -12,6 +12,16 @@ import {
   type SnapshotSummary,
 } from "../shared/types.ts";
 import { COLLECTOR_VERSION } from "../shared/version.ts";
+import {
+  breakdownSignature,
+  compactNumber,
+  formatNumber,
+  formatPercent,
+  pad2,
+  roundPercent,
+  snapshotSignature,
+  versionLabel,
+} from "./format.ts";
 import { CATEGORY_LABEL_KEYS, t, type Locale } from "./i18n.ts";
 import {
   COMPACT_COLUMNS,
@@ -410,7 +420,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
 
   let currentFreeTokens = 0;
   let mapSignature: string | null = null;
-  let breakdownSignature: string | null = null;
+  let breakdownSignatureCache: string | null = null;
   let cellElements = new Map<number, HTMLButtonElement>();
   let hoveredCell: CellTarget | null = null;
   let pinnedCell: CellTarget | null = null;
@@ -505,10 +515,6 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
   window.addEventListener("scroll", onScrollOrResize, true);
   window.addEventListener("resize", onScrollOrResize);
 
-  function versionLabel(version: string): string {
-    return version.startsWith("v") ? version : `v${version}`;
-  }
-
   function renderView(previous: PanelView | null, next: PanelView): void {
     if (previous !== null && previous.sessionID !== next.sessionID) resetSessionState();
     renderStatus(next.status);
@@ -522,7 +528,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
   function resetSessionState(): void {
     currentFreeTokens = 0;
     mapSignature = null;
-    breakdownSignature = null;
+    breakdownSignatureCache = null;
     cellElements.clear();
     hoveredCell = null;
     pinnedCell = null;
@@ -597,7 +603,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     renderRefreshBanner();
     renderStatus(view.status);
     mapSignature = null;
-    breakdownSignature = null;
+    breakdownSignatureCache = null;
   }
 
   function renderVersionBanner(): void {
@@ -630,7 +636,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     mapCard.hidden = true;
     breakdownCard.hidden = true;
     mapSignature = null;
-    breakdownSignature = null;
+    breakdownSignatureCache = null;
     hoveredCell = null;
     pinnedCell = null;
     itemButtons = [];
@@ -663,23 +669,10 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     );
   }
 
-  function formatNumber(value: number): string {
-    return new Intl.NumberFormat(currentLocale === "zh" ? "zh-CN" : "en-US").format(value);
-  }
-
   function itemCountLabel(count: number): string {
     return count === 1
       ? t(currentLocale, "itemCountOne")
-      : t(currentLocale, "itemCountMany", { items: formatNumber(count) });
-  }
-
-  function formatPercent(value: number): string {
-    const rounded = Math.round(value * 10) / 10;
-    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
-  }
-
-  function pad2(value: number): string {
-    return String(value).padStart(2, "0");
+      : t(currentLocale, "itemCountMany", { items: formatNumber(count, currentLocale) });
   }
 
   /** 「更新于」只显示快照的采集时间，不用本地当前时间冒充。 */
@@ -723,26 +716,6 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     });
   }
 
-  function snapshotSignature(next: SnapshotSummary, zoom: PanelView["zoom"]): string {
-    return [
-      next.sessionID,
-      next.collectedAt,
-      next.used,
-      next.window,
-      zoom,
-      next.categories.map((usage) => `${usage.category}:${usage.items}:${usage.tokens}`).join(","),
-      next.items.length,
-    ].join("|");
-  }
-
-  function compactNumber(value: number): string {
-    const safe = Math.max(0, Math.round(value));
-    if (safe < 1000) return String(safe);
-    const scaled = safe / 1000;
-    const digits = scaled >= 10 ? 0 : 1;
-    return `${scaled.toFixed(digits).replace(/\.0$/, "")}k`;
-  }
-
   function renderZoomLabel(layout: MapLayout): void {
     const value = compactNumber(layout.denominator);
     zoomButton.textContent = t(
@@ -755,10 +728,6 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
 
   function toggleZoom(): void {
     model.setZoom(view.zoom === "window" ? "fit" : "window");
-  }
-
-  function roundPercent(value: number): string {
-    return String(Math.round(value * 1000) / 1000);
   }
 
   function cellBackground(cell: MapCell): string {
@@ -778,7 +747,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       .map(
         (segment) =>
           `${categoryLabel(segment.category)} ${t(currentLocale, "tokenCount", {
-            tokens: formatNumber(Math.round(segment.tokens)),
+            tokens: formatNumber(Math.round(segment.tokens), currentLocale),
           })}`,
       )
       .join(t(currentLocale, "listSeparator"));
@@ -811,7 +780,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       button.setAttribute(
         "aria-label",
         cell.free
-          ? t(currentLocale, "freeCellLabel", { tokens: formatNumber(currentFreeTokens) })
+          ? t(currentLocale, "freeCellLabel", { tokens: formatNumber(currentFreeTokens, currentLocale) })
           : cellLabel(cell),
       );
       button.dataset.index = String(cell.index);
@@ -861,12 +830,12 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       const tokens = document.createElement("span");
       tokens.className = "tip-tokens";
       tokens.textContent = t(currentLocale, "tokenCount", {
-        tokens: formatNumber(currentFreeTokens),
+        tokens: formatNumber(currentFreeTokens, currentLocale),
       });
       row.append(dot, name, tokens);
       fragment.append(row);
       mapHint.textContent = t(currentLocale, "freeCellLabel", {
-        tokens: formatNumber(currentFreeTokens),
+        tokens: formatNumber(currentFreeTokens, currentLocale),
       });
     } else {
       for (const segment of cell.segments) {
@@ -880,7 +849,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
         const tokens = document.createElement("span");
         tokens.className = "tip-tokens";
         tokens.textContent = t(currentLocale, "tokenCount", {
-          tokens: formatNumber(Math.round(segment.tokens)),
+          tokens: formatNumber(Math.round(segment.tokens), currentLocale),
         });
         row.append(dot, name, tokens);
         fragment.append(row);
@@ -889,7 +858,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
         .map(
           (segment) =>
             `${categoryLabel(segment.category)} ${t(currentLocale, "tokenCount", {
-              tokens: formatNumber(Math.round(segment.tokens)),
+              tokens: formatNumber(Math.round(segment.tokens), currentLocale),
             })}`,
         )
         .join(t(currentLocale, "listSeparator"));
@@ -1022,45 +991,14 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     }
   }
 
-  function breakdownSignatureFor(current: PanelView): string {
-    const preview = current.preview;
-    if (preview !== null) {
-      return [
-        "preview",
-        preview.itemId,
-        preview.category,
-        preview.title,
-        preview.chars,
-        preview.text,
-        preview.loading,
-        preview.error ?? "",
-        preview.truncated,
-        current.notice ?? "",
-      ].join("|");
-    }
-    const summary = current.summary;
-    return [
-      "list",
-      summary?.sessionID ?? "",
-      summary?.collectedAt ?? "",
-      summary?.used ?? 0,
-      summary?.window ?? 0,
-      summary?.categories.map((usage) => `${usage.category}:${usage.items}:${usage.tokens}`).join(",") ?? "",
-      summary?.items.map((item) => `${item.id}:${item.title}:${item.chars}`).join(",") ?? "",
-      current.selectedCategory ?? "",
-      current.layer,
-      current.notice ?? "",
-    ].join("|");
-  }
-
   function renderBreakdown(previous: PanelView | null, next: PanelView): void {
     if (next.body.kind !== "summary" || next.summary === null) {
       backButton.hidden = true;
       return;
     }
-    const signature = breakdownSignatureFor(next);
-    if (signature === breakdownSignature) return;
-    breakdownSignature = signature;
+    const signature = breakdownSignature(next);
+    if (signature === breakdownSignatureCache) return;
+    breakdownSignatureCache = signature;
 
     const active = document.activeElement;
     const activeElement = active instanceof HTMLElement && breakdownBody.contains(active) ? active : null;
@@ -1120,7 +1058,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       drillMeta.textContent = row
         ? t(currentLocale, "drillMeta", {
           items: itemCountLabel(row.items),
-          tokens: formatNumber(row.tokens),
+          tokens: formatNumber(row.tokens, currentLocale),
         })
         : itemCountLabel(items.length);
       drill.append(drillTitle, drillMeta);
@@ -1146,7 +1084,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
         const itemMeta = document.createElement("div");
         itemMeta.className = "item-meta";
         itemMeta.textContent = t(currentLocale, "itemChars", {
-          chars: formatNumber(item.chars),
+          chars: formatNumber(item.chars, currentLocale),
         });
         itemRow.append(itemTitle, itemMeta);
         itemRow.addEventListener("click", () => { void model.openItem(item.id); });
@@ -1181,7 +1119,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       meta.className = "row-meta";
       meta.textContent = t(currentLocale, "drillMeta", {
         items: itemCountLabel(entry.items),
-        tokens: formatNumber(entry.tokens),
+        tokens: formatNumber(entry.tokens, currentLocale),
       });
       row.append(swatch, name, meta);
       row.addEventListener("click", () => {
@@ -1201,7 +1139,9 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     const freeMeta = document.createElement("span");
     freeMeta.className = "row-meta";
     const bar = windowBar(current.used, current.window);
-    const freeTokens = t(currentLocale, "tokenCount", { tokens: formatNumber(bar.free) });
+    const freeTokens = t(currentLocale, "tokenCount", {
+      tokens: formatNumber(bar.free, currentLocale),
+    });
     freeMeta.textContent = bar.over
       ? `${freeTokens} · ${t(currentLocale, "overWindow")}`
       : freeTokens;
@@ -1217,10 +1157,14 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
   function renderPreview(state: PreviewState, notice: PanelView["notice"]): void {
     previewTitle.textContent = state.title || t(currentLocale, "unnamedItem");
     const suffix = state.truncated
-      ? t(currentLocale, "previewTruncated", { chars: formatNumber(PREVIEW_MAX_CHARS) })
+      ? t(currentLocale, "previewTruncated", {
+        chars: formatNumber(PREVIEW_MAX_CHARS, currentLocale),
+      })
       : "";
     previewMeta.textContent =
-      `${categoryLabel(state.category)} · ${t(currentLocale, "itemChars", { chars: formatNumber(state.chars) })}${suffix}`;
+      `${categoryLabel(state.category)} · ${t(currentLocale, "itemChars", {
+        chars: formatNumber(state.chars, currentLocale),
+      })}${suffix}`;
     previewBody.textContent = state.text;
     previewBody.hidden = state.loading || state.error !== null;
     previewCopy.disabled = state.loading || state.error !== null;
@@ -1305,8 +1249,8 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
 
     usageModel.textContent = next.model;
     usageModel.title = next.model;
-    usageUsed.textContent = formatNumber(next.used);
-    usageWindow.textContent = formatNumber(next.window);
+    usageUsed.textContent = formatNumber(next.used, currentLocale);
+    usageWindow.textContent = formatNumber(next.window, currentLocale);
     const percent = next.window > 0 ? (next.used / next.window) * 100 : 0;
     usagePct.textContent = `${formatPercent(percent)}%`;
 
