@@ -858,6 +858,7 @@ function renderMap(next: SnapshotSummary, layout: MapLayout): void {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       if (cell.free) {
+        clearMapFocus();
         model.selectCategory(null);
         return;
       }
@@ -952,6 +953,13 @@ function hideTooltip(): void {
   }
 }
 
+/** 离开分类时同时清掉悬停与钉住的提示，和旧的 selectCategory 行为一致。 */
+function clearMapFocus(): void {
+  hoveredCell = null;
+  pinnedCell = null;
+  hideTooltip();
+}
+
 function focusItemButton(focus: PanelFocus): void {
   const byId = focus.itemId === null
     ? -1
@@ -1010,12 +1018,11 @@ function goBack(): void {
   const previousLayer = view.layer;
   if (previousLayer === "overview") return;
   model.goBack();
-  if (
-    previousLayer === "items"
-    && model.getView().layer === "overview"
-    && previousCategory !== null
-  ) {
-    focusCategoryRow(previousCategory);
+  if (model.getView().layer === "overview") {
+    clearMapFocus();
+    if (previousLayer === "items" && previousCategory !== null) {
+      focusCategoryRow(previousCategory);
+    }
   }
 }
 
@@ -1210,7 +1217,10 @@ function renderBreakdown(previous: PanelView | null, next: PanelView): void {
       tokens: formatNumber(entry.tokens),
     });
     row.append(swatch, name, meta);
-    row.addEventListener("click", () => model.selectCategory(entry.category));
+    row.addEventListener("click", () => {
+      clearMapFocus();
+      model.selectCategory(entry.category);
+    });
     list.append(row);
   }
 
