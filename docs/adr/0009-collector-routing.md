@@ -1,15 +1,15 @@
-# 在多个 Collector 中查找 session
+# Find a session across multiple Collectors
 
-每个 OpenCode 实例运行一个 Collector，各自写自己的 discovery 文件。用户同时开着多个实例时，同一个 session 只属于其中一个。Service 只询问最新启动的实例，会在 session 属于较旧实例时误报 404，面板显示「还没有请求记录」，而记录其实存在。
+Each OpenCode instance runs one Collector, and each writes its own discovery file. When the user has several instances open, a given session belongs to only one of them. A Service that asks only the newest instance reports 404 when the session belongs to an older instance, and the panel shows "Waiting for first request" even though the record exists.
 
-Service 解析路由时枚举全部 discovery，逐个探活（1 秒超时），把通过的实例按 `startedAt` 从新到旧排序。转发时依次询问，共享 3 秒总预算：`400` 立即返回，说明请求本身有错，换实例也没用；`404` 继续问下一个；`200` 立即返回。全部 404 才返回 404；有实例超时且没有任何 200 时返回 504；其余失败返回 503。
+When resolving a route, the Service enumerates all discovery files, probes each one (1 second timeout), and sorts the instances that pass by `startedAt`, newest first. It then forwards the request to each in turn under a shared 3 second budget: `400` returns immediately, because the request itself is wrong and another instance will not help; `404` moves on to the next instance; `200` returns immediately. Only when all instances return 404 does it return 404; if an instance timed out and no 200 arrived, it returns 504; any other failure returns 503.
 
-**Considered Options**
+**Considered options**
 
-- 只问最新实例：实现简单，但多实例并存时会误报空记录。
-- 按 discovery 的 mtime 选：mtime 只反映写入时间，不反映实例是否还活着。
-- 并行 fan-out：延迟最低，但每个请求都会打到所有实例，且要处理多份结果的竞态。
+- Ask only the newest instance: simple, but reports an empty record when multiple instances coexist.
+- Choose by discovery file mtime: mtime only reflects write time, not whether the instance is still alive.
+- Parallel fan-out: lowest latency, but every request hits every instance and multiple results create races.
 
 **Consequences**
 
-最坏情况下串行询问 N 个实例，总耗时受 3 秒预算约束，单个慢实例会挤占后面实例的时间。discovery 目录里的无关文件在解析阶段就被跳过，不会进入候选列表。
+In the worst case the Service asks N instances serially, bounded by the 3 second budget, and one slow instance eats into the time available to later instances. Unrelated files in the discovery directory are skipped during parsing and never enter the candidate list.

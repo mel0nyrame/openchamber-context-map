@@ -1,18 +1,18 @@
-# 地图只画已用构成，窗口余量交给 bar 与 Breakdown
+# The map draws only the used composition; the bar and Breakdown carry the window remainder
 
-> 本文关于「格子只表达已用」的部分已被 `docs/adr/0011-map-denominator.md` 取代；固定色板、主题切换与渐变规则仍然有效。
+> The part of this document stating that cells express only used content is superseded by `docs/adr/0011-map-denominator.md`; the fixed palette, theme switching, and gradient rules still apply.
 
-Context map 固定 200 格（桌面 25×8，窄屏 20×10），格子只表达已用部分的构成，格子总数不随占用率变化。窗口余量由地图下方 5px bar 和 Breakdown 的 Free space 行表达。地图回答「里面是什么」，bar 回答「占了多少」。
+The context map has a fixed 200 cells (25×8 on desktop, 20×10 on narrow screens). Cells express only the composition of the used portion, and the total cell count does not change with usage. The window remainder is shown by the 5px bar below the map and the Free space row in Breakdown. The map answers "what is inside"; the bar answers "how much is used".
 
-分类色板是固定的 8 色加 Free space 中性色，浅色与深色各一套，由 `data-oc-theme` 选择器切换。边界格子按两个分类在格内的占比做硬停靠渐变，停靠点由纯函数计算。
+The category palette is a fixed set of eight colors plus a neutral color for Free space, one set for light theme and one for dark, switched by the `data-oc-theme` selector. A boundary cell uses a hard-stop gradient based on the two categories' shares within the cell, with stop points computed by pure functions.
 
-**Considered Options**
+**Considered options**
 
-- 按 Window 铺格、空闲格子留白：占用低时分类格子被压到看不清，且与 bar 的职责重复。
-- 从 host 主色派生 8 个分类色：host 只提供一个主色，派生结果区分度不足，也无法一次校验对比度。
-- 边界格子取占比最大的分类单色：会谎报另一个分类的存在。
-- 用 canvas 或逐格裁剪画渐变：纯函数加 CSS 渐变已经够用，不引入额外复杂度。
+- Lay out cells by Window and leave free cells blank: at low usage the category cells shrink until they are unreadable, and this duplicates the bar's role.
+- Derive eight category colors from the host primary color: the host provides only one primary color, the derived colors lack separation, and contrast cannot be checked in one pass.
+- Color a boundary cell with the dominant category: it misreports the presence of the other category.
+- Draw gradients with canvas or per-cell clipping: pure functions plus CSS gradients are sufficient and add no extra complexity.
 
 **Consequences**
 
-分类顺序固定为 `CATEGORIES` 的顺序，地图位置不随大小排序。新增分类要同时补两套色板并重测对比度。对比度按近似背景计算，真实 host 主题可能有偏差。格子只代表构成，不能从格子数读出占用率，读者需要看 bar 或用量卡。
+Category order is fixed to the order of `CATEGORIES`; map position does not follow size sorting. Adding a category requires adding both palettes and rechecking contrast. Contrast is computed against an approximate background, so a real host theme may differ. Cells represent composition only; usage cannot be read from the cell count, so readers must look at the bar or the usage card.

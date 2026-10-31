@@ -1,25 +1,25 @@
-# 快照持久化到 state 目录
+# Persist snapshots to the state directory
 
-Collector 的快照原本只在内存里，OpenCode 一重启就清空，面板要等下一次请求才有内容。现在把 `/summary` 返回的那份骨架按 session 写到 state 目录，启动时读回。保留「只保留最后一次请求」的语义：恢复的是上一次运行的最后一份快照，不是历史。
+Collector snapshots used to live only in memory and were cleared whenever OpenCode restarted, so the panel had no content until the next request. Now the skeleton returned by `/summary` is written per session to the state directory and read back at startup. The "keep only the last request" semantics still holds: what is restored is the last snapshot from the previous run, not history.
 
-写盘的内容就是 `SnapshotSummary`：模型、Used、窗口、`windowAssumed`、`estimated`、`baseline`、`collectedAt`、8 类汇总，以及每个条目的 `title`、`chars` 和前 200 字符的 `head`。`/item` 的正文预览（每条最多 8000 字符）不写盘，重启后点条目会拿到 404。
+What is written is exactly `SnapshotSummary`: model, Used, window, `windowAssumed`, `estimated`, `baseline`, `collectedAt`, the eight category totals, and each item's `title`, `chars`, and first 200 characters of `head`. The item previews served by `/item` (up to 8000 characters each) are not written; after a restart, clicking an item returns 404.
 
-文件默认放在 discovery 目录同级的 `snapshots/` 下（开发期覆盖 discovery 目录时放在它下面的 `snapshots/`），文件名是 `<sessionID>.json`，目录 0700、文件 0600。写入用唯一的临时名加 rename，避免并发 setup 互抢。写入时机在异步补齐完成之后，按 session 去抖；`context` hook 里仍然不碰 I/O。dispose 时尽力 flush 一次，但进程被强杀时以最后一次去抖写入为准。
+By default, files live in `snapshots/` next to the discovery directory (when the discovery directory is overridden during development, in `snapshots/` under it), named `<sessionID>.json`, with a 0700 directory and 0600 files. Writes use a unique temporary name plus rename so concurrent setups do not race. Writes happen after asynchronous enrichment completes and are debounced per session; the `context` hook still performs no I/O. On dispose the Collector flushes once on a best-effort basis, but if the process is killed, the last debounced write is what remains.
 
-启动时读取全部文件，按 `collectedAt` 排序，最多保留 20 个 session，超过 7 天的直接丢弃。文件带 `schemaVersion`，版本不符就丢弃而不是尝试迁移。淘汰时同时删除文件。
+At startup the Collector reads all files, sorts them by `collectedAt`, keeps at most 20 sessions, and discards anything older than 7 days. Files carry `schemaVersion`; a mismatched version is discarded rather than migrated. Eviction also deletes the file.
 
-恢复的快照带 `restored: true`，面板在「更新于」旁标「上次运行」；同一 session 来了新请求、写入新快照后标记清除。默认开启，`CONTEXT_MAP_PERSIST=0` 可以关闭。
+A restored snapshot carries `restored: true`, and the panel adds " · last run" next to "Updated"; the mark clears when a new request arrives for the same session and a new snapshot is written. Persistence is on by default; `CONTEXT_MAP_PERSIST=0` turns it off.
 
-**Considered Options**
+**Considered options**
 
-- 连正文预览一起存：tool result、文件内容、环境变量都会落盘，泄露面最大，收益只是省一次重新请求。
-- 由 Service 缓存取到过的 `/summary`：插件完全不碰盘，但只有面板打开过的 session 才有缓存，而且 Service 要从无状态变成有状态。
-- 只在 dispose 时写：`kill -9` 或崩溃时全部丢失。
-- 把基线模板也持久化：要写 system prompt 与 AGENTS.md，收益只是新 session 早一点显示 `Estimated baseline`。
-- 不设过期：文件会随着 session 数量长期堆积。
+- Store item previews too: tool results, file contents, and environment variables would reach disk, maximizing exposure for the sole benefit of avoiding one new request.
+- Have the Service cache `/summary` responses it has fetched: the plugin would never touch disk, but only sessions whose panel was opened would be cached, and the Service would go from stateless to stateful.
+- Write only on dispose: `kill -9` or a crash loses everything.
+- Persist the baseline template too: would write the system prompt and AGENTS.md, for the sole benefit of showing `Estimated baseline` a little earlier in a new session.
+- No expiry: files would accumulate with the number of sessions over time.
 
 **Consequences**
 
-磁盘上会出现每条 200 字符的 prompt 片段，量级与本机 shell history 相当；同一账号可读。重启后条目预览不可用，面板需要一句单独的提示，不能复用「快照已更新」。恢复的快照是重启前最后一次请求，可能与 session 当前状态不符，所以必须标「上次运行」。以后改 `SnapshotSummary` 结构时要升 `schemaVersion`，旧文件会被丢弃。
+Disk now holds 200-character prompt fragments per item, comparable in scale to local shell history, readable by the same account. Item previews are unavailable after a restart, and the panel needs a separate notice instead of reusing "Snapshot updated". A restored snapshot is the last request before the restart and may not match the session's current state, so it must be marked "last run". Changing the `SnapshotSummary` structure later requires bumping `schemaVersion`; old files are discarded.
 
-ADR 0002 的「不把 prompt 写盘」由本记录取代；「只保留最后一次请求、不做历史回填、不存正文预览」仍然有效。
+ADR 0002's rule "do not write prompts to disk" is superseded by this record; "keep only the last request, do not backfill history, and do not store item previews" still holds.
