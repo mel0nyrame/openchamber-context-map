@@ -63,7 +63,13 @@ describe("刷新流程", () => {
     await flush();
     expect(controller.getView().state.failures).toBe(0);
     expect(controller.getView().state.manualFailure).toBe(false);
-    expect(model.getView().status).toEqual({ kind: "disconnected", reason: "not_found" });
+    expect(model.getView().status).toEqual({
+      kind: "disconnected",
+      reason: "not_found",
+      titleKey: "collectorNotRunning",
+      detailKey: "collectorNotRunningDetail",
+      args: { path: "~/.config/opencode/plugins/" },
+    });
     expect(model.getView().body.kind).toBe("placeholder");
     expect(views.at(-1)?.state.failures).toBe(0);
   });

@@ -169,7 +169,11 @@ class FakePanelModel implements PanelModel {
 
 function baseView(overrides: Partial<PanelView> = {}): PanelView {
   const base: PanelView = {
-    status: { kind: "checking" },
+    status: {
+      kind: "checking",
+      titleKey: "statusCheckingTitle",
+      detailKey: "statusCheckingDetail",
+    },
     body: {
       kind: "placeholder",
       titleKey: "connectingTitle",
@@ -253,14 +257,24 @@ describe("状态条", () => {
   }> = [
     {
       label: "连接中",
-      status: { kind: "checking" },
+      status: {
+        kind: "checking",
+        titleKey: "statusCheckingTitle",
+        detailKey: "statusCheckingDetail",
+      },
       version: "…",
       title: "Connecting to the local Service…",
       detail: "The Service may take a moment to start the first time.",
     },
     {
       label: "已连接",
-      status: { kind: "connected", version: "1.2.3" },
+      status: {
+        kind: "connected",
+        version: "1.2.3",
+        titleKey: "statusConnectedTitle",
+        detailKey: "statusConnectedDetail",
+        args: { version: "v1.2.3" },
+      },
       version: "v1.2.3",
       title: "Collector connected · v1.2.3",
       detail:
@@ -273,6 +287,9 @@ describe("状态条", () => {
         version: "1.2.3",
         outdated: true,
         expectedVersion: "2.0.0",
+        titleKey: "statusConnectedTitle",
+        detailKey: "statusOutdatedDetail",
+        args: { version: "v1.2.3", expected: "v2.0.0" },
       },
       version: "v1.2.3",
       title: "Collector connected · v1.2.3",
@@ -280,7 +297,13 @@ describe("状态条", () => {
     },
     {
       label: "未找到 Collector",
-      status: { kind: "disconnected", reason: "not_found" },
+      status: {
+        kind: "disconnected",
+        reason: "not_found",
+        titleKey: "collectorNotRunning",
+        detailKey: "collectorNotRunningDetail",
+        args: { path: "~/.config/opencode/plugins/" },
+      },
       version: "—",
       title: "Collector is not running",
       detail:
@@ -288,7 +311,12 @@ describe("状态条", () => {
     },
     {
       label: "Collector 无响应",
-      status: { kind: "disconnected", reason: "unreachable" },
+      status: {
+        kind: "disconnected",
+        reason: "unreachable",
+        titleKey: "collectorUnreachableTitle",
+        detailKey: "collectorUnreachableDetail",
+      },
       version: "—",
       title: "Collector is not responding",
       detail:
@@ -318,16 +346,50 @@ describe("状态条", () => {
       expect(inline.getAttribute("aria-label")).toBe(full);
     });
   }
+
+  test("状态条只渲染模型给的 copy，不按 reason 重新判断", () => {
+    const { root } = mount(baseView({
+      status: {
+        kind: "disconnected",
+        reason: "not_found",
+        titleKey: "collectorUnreachableTitle",
+        detailKey: "collectorUnreachableDetail",
+      },
+    }));
+    const inline = query(root, ".status-inline");
+    expect(inline.title).toBe(
+      "Collector is not responding · The discovery file exists, but the Collector is not responding. Restart OpenCode and try again.",
+    );
+    expect(query(root, ".status-version").textContent).toBe("—");
+  });
+
+  test("Host 失败的状态条使用模型给的宿主 copy", () => {
+    const { root } = mount(baseView({
+      status: {
+        kind: "failed",
+        titleKey: "hostDisabledTitle",
+        detailKey: "hostDisabledDetail",
+      },
+    }));
+    const inline = query(root, ".status-inline");
+    expect(inline.dataset.state).toBe("failed");
+    expect(inline.title).toBe("Context Map is paused · Re-enable it in Settings → Extensions.");
+    expect(inline.getAttribute("aria-label")).toBe(inline.title);
+    expect(query(root, ".status-version").textContent).toBe("—");
+  });
 });
 
 describe("版本横幅", () => {
-  test("版本过期时显示横幅和升级说明", () => {
+  test("版本横幅使用模型给出的 expectedVersion", () => {
     const { root } = mount(baseView({
       status: {
         kind: "connected",
         version: "1.2.3",
         outdated: true,
-        expectedVersion: "2.0.0",
+        expectedVersion: "9.9.9",
+        titleKey: "statusConnectedTitle",
+        detailKey: "statusOutdatedDetail",
+        args: { version: "v1.2.3", expected: "v9.9.9" },
       },
     }));
     const slot = root.children[1];
@@ -337,13 +399,19 @@ describe("版本横幅", () => {
       .toBe("Collector version is outdated");
     expect(slot.querySelector(".oc-sdk-banner-body")?.textContent)
       .toBe(
-        "Collector is running v1.2.3; this extension expects v2.0.0. Update the Collector manually; it will not update automatically.",
+        "Collector is running v1.2.3; this extension expects v9.9.9. Update the Collector manually; it will not update automatically.",
       );
   });
 
   test("版本一致时隐藏横幅", () => {
     const { root } = mount(baseView({
-      status: { kind: "connected", version: "1.2.3" },
+      status: {
+        kind: "connected",
+        version: "1.2.3",
+        titleKey: "statusConnectedTitle",
+        detailKey: "statusConnectedDetail",
+        args: { version: "v1.2.3" },
+      },
     }));
     const slot = root.children[1];
     if (!(slot instanceof HTMLElement)) throw new Error("missing version slot");
@@ -385,7 +453,13 @@ describe("占位区", () => {
 
   test("未安装 Collector 时在详情里给出安装路径", () => {
     const { root } = mount(baseView({
-      status: { kind: "disconnected", reason: "not_found" },
+      status: {
+        kind: "disconnected",
+        reason: "not_found",
+        titleKey: "collectorNotRunning",
+        detailKey: "collectorNotRunningDetail",
+        args: { path: "~/.config/opencode/plugins/" },
+      },
       body: {
         kind: "placeholder",
         titleKey: "collectorNotRunning",
@@ -433,7 +507,13 @@ describe("摘要", () => {
       baseline: true,
     });
     const { root } = mount(baseView({
-      status: { kind: "connected", version: "1.2.3" },
+      status: {
+        kind: "connected",
+        version: "1.2.3",
+        titleKey: "statusConnectedTitle",
+        detailKey: "statusConnectedDetail",
+        args: { version: "v1.2.3" },
+      },
       body: { kind: "summary", summary: snapshot },
       sessionID: snapshot.sessionID,
       summary: snapshot,
@@ -467,7 +547,13 @@ describe("摘要", () => {
   test("三个标记都为 false 时隐藏标记区", () => {
     const snapshot = summary();
     const { root, model } = mount(baseView({
-      status: { kind: "connected", version: "1.2.3" },
+      status: {
+        kind: "connected",
+        version: "1.2.3",
+        titleKey: "statusConnectedTitle",
+        detailKey: "statusConnectedDetail",
+        args: { version: "v1.2.3" },
+      },
       body: { kind: "summary", summary: snapshot },
       sessionID: snapshot.sessionID,
       summary: snapshot,
@@ -495,7 +581,13 @@ describe("命令日志", () => {
   test("点击缩放按钮把意图交给假模型", () => {
     const snapshot = summary();
     const { root, model } = mount(baseView({
-      status: { kind: "connected", version: "1.2.3" },
+      status: {
+        kind: "connected",
+        version: "1.2.3",
+        titleKey: "statusConnectedTitle",
+        detailKey: "statusConnectedDetail",
+        args: { version: "v1.2.3" },
+      },
       body: { kind: "summary", summary: snapshot },
       sessionID: snapshot.sessionID,
       summary: snapshot,

@@ -40,7 +40,11 @@ function makeSummary(overrides: Partial<SnapshotSummary> = {}): SnapshotSummary 
 function makeView(overrides: Partial<PanelView> = {}): PanelView {
   const summary = makeSummary();
   return {
-    status: { kind: "checking" },
+    status: {
+      kind: "checking",
+      titleKey: "statusCheckingTitle",
+      detailKey: "statusCheckingDetail",
+    },
     body: { kind: "summary", summary },
     sessionID: summary.sessionID,
     summary,
