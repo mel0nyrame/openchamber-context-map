@@ -208,7 +208,12 @@ Before committing:
 ```bash
 bun test
 bun run typecheck
+bun run check:docs
 ```
+
+`bun run check:docs` fails when a file under `src/` or `scripts/` has no row in `docs/modules.md`, so adding or deleting a module means updating that table.
+
+Manual acceptance steps that need a real OpenCode and OpenChamber are in `docs/manual-checklist.md`.
 
 ### Why build artifacts are committed
 
@@ -227,11 +232,14 @@ src/collector/   OpenCode Collector
 src/service/     OpenChamber host Service
 src/panel/       Panel
 src/shared/      Protocol, discovery, version
-scripts/         install, dev, build
+scripts/         install, dev, build, docs check
+tests/           Unit tests, named after the module they cover
 panel/           Panel build output
 service/         Service build output
 collector/       Collector build output
-docs/adr/        Architecture decision records (English, with Chinese translations)
+prototype/       Throwaway UI prototypes (prototype/README.md)
+docs/modules.md  Every source file with its exports and job
+docs/adr/        Architecture decision records, indexed by docs/adr/README.md
 ```
 
 ## Privacy

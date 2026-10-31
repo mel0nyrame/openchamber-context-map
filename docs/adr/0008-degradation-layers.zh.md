@@ -1,5 +1,7 @@
 # 降级按失败来源分层
 
+> 本文记录每种失败显示什么；连续失败后何时停止轮询见 `docs/adr/0007-refresh-policy.zh.md`。
+
 面板的失败不是一种。host service 不可用（未安装、未授权、被暂停、进程退出）、Collector 不可用（没有 discovery、探活失败、版本过旧）、单次请求失败（超时、解析失败、意外状态码）来自不同层，用户能做的处理也不同。统一成一句「加载失败」会把「去装 Collector」和「等一会儿重试」混为一谈。
 
 host 失败替换整块内容，并给出 Settings → Extensions 的路径。Collector 状态显示占位：没有 discovery 时给出 `~/.config/opencode/plugins/`，有 discovery 但没有记录时说明发起一次请求即可。单次请求失败在已有数据时静默保留，连续 3 次才由刷新策略接管；没有数据时才显示占位。

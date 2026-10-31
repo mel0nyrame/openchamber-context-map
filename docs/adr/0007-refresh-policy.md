@@ -1,5 +1,7 @@
 # Poll only while busy; layer failures by source
 
+> This record covers when polling stops after repeated failures. The message for each failure source is `docs/adr/0008-degradation-layers.md`.
+
 The panel does not poll continuously. While a session is busy it refreshes every 2 seconds; when the session turns idle it stops immediately, and it also stops when the session changes or the panel is hidden. It uses a `setTimeout` chain rather than `setInterval`: the next wait starts after the previous request finishes, requests never overlap, and stopping or resetting is simpler.
 
 Failures fall into two classes. A failed host or Service request counts toward consecutive failures; after 3 in a row the panel stops automatic refresh and shows a banner, and a successful manual refresh restores it. A disconnected Collector does not count: `/health` still succeeds, only `collector.connected` is false, so the panel enters the "Collector is not running" state and keeps polling. Counting a disconnected Collector as a failure would prevent polling from resuming automatically when the Collector comes back.
