@@ -8,42 +8,7 @@ import {
   type PanelView,
 } from "../src/panel/model.ts";
 import type { RefreshView } from "../src/panel/refresh.ts";
-import {
-  CATEGORIES,
-  type CategoryUsage,
-  type SnapshotSummary,
-} from "../src/shared/types.ts";
-
-function categories(): CategoryUsage[] {
-  return CATEGORIES.map((category, index) => ({
-    category,
-    items: index === 0 ? 1 : 0,
-    chars: index === 0 ? 400 : 0,
-    tokens: index === 0 ? 100 : 0,
-  }));
-}
-
-function summary(overrides: Partial<SnapshotSummary> = {}): SnapshotSummary {
-  return {
-    sessionID: "ses_one",
-    model: "anthropic/claude-sonnet-4-5",
-    used: 12_000,
-    window: 200_000,
-    windowAssumed: false,
-    estimated: false,
-    baseline: false,
-    restored: false,
-    collectedAt: "2026-10-31T10:00:00.000Z",
-    categories: categories(),
-    items: [{ id: "system:0@1", title: "System", chars: 400, head: "S".repeat(200) }],
-    ...overrides,
-  };
-}
-
-const connected = {
-  connected: true,
-  version: "1.2.3",
-} as const;
+import { connected, summary } from "./fixtures.ts";
 
 function placeholder(view: PanelView): Extract<PanelBody, { kind: "placeholder" }> {
   if (view.body.kind !== "placeholder") throw new Error("expected a placeholder body");
@@ -93,7 +58,11 @@ describe("PanelModel 内容优先级", () => {
   test("宿主错误优先于连接状态，即使 Collector 已连接", () => {
     const model = readyModel();
     model.setConnection(connected);
-    model.setHostProblem({ titleKey: "hostNoServiceTitle", detailKey: "hostNoServiceDetail" });
+    model.setHostProblem({
+      titleKey: "hostNoServiceTitle",
+      detailKey: "hostNoServiceDetail",
+      blocking: true,
+    });
     const view = model.getView();
     expect(view.status).toEqual({
       kind: "failed",
@@ -110,15 +79,54 @@ describe("PanelModel 内容优先级", () => {
   test("已有内容时非阻断宿主错误只改变状态条，保留 summary", () => {
     const model = readyModel();
     model.setConnection(connected);
-    model.setSummary(summary());
-    model.setHostProblem(
-      { titleKey: "hostUnavailableTitle", detailKey: "hostUnavailableDetail" },
-      { keepContent: true },
-    );
+    const next = summary();
+    model.setSummary(next);
+    expect(model.setHostProblem({
+      titleKey: "hostUnavailableTitle",
+      detailKey: "hostUnavailableDetail",
+      blocking: false,
+    })).toBe(false);
     const view = model.getView();
     expect(view.status.kind).toBe("failed");
-    expect(view.hostProblem).toBeNull();
-    expect(view.body.kind).toBe("summary");
+    expect(view.body).toEqual({ kind: "summary", summary: next });
+  });
+
+  test("没有内容可保留时非阻断宿主错误也阻断正文", () => {
+    const model = readyModel();
+    expect(model.setHostProblem({
+      titleKey: "hostUnavailableTitle",
+      detailKey: "hostUnavailableDetail",
+      blocking: false,
+    })).toBe(true);
+    const view = model.getView();
+    expect(view.status.kind).toBe("failed");
+    expect(placeholder(view)).toMatchObject({
+      titleKey: "hostUnavailableTitle",
+      detailKey: "hostUnavailableDetail",
+      retry: true,
+    });
+  });
+
+  test("阻断宿主错误清空已有连接与摘要", () => {
+    const model = readyModel();
+    model.setConnection(connected);
+    model.setSummary(summary());
+    expect(model.setHostProblem({
+      titleKey: "hostNoServiceTitle",
+      detailKey: "hostNoServiceDetail",
+      blocking: true,
+    })).toBe(true);
+    const view = model.getView();
+    expect(view.status.kind).toBe("failed");
+    expect(view.summary).toBeNull();
+    expect(placeholder(view)).toMatchObject({
+      titleKey: "hostNoServiceTitle",
+      detailKey: "hostNoServiceDetail",
+      retry: true,
+    });
+
+    model.setHostProblem(null);
+    expect(model.getView().status).toEqual({ kind: "checking" });
   });
 
   test("Collector unreachable 显示 unreachable 占位", () => {
@@ -224,8 +232,9 @@ describe("PanelModel 状态", () => {
     const model = readyModel();
     model.setConnection(connected);
     model.setSummaryProblem("timeout");
-    model.setSummary(summary());
-    expect(model.getView().summaryProblem).toBeNull();
+    const next = summary();
+    model.setSummary(next);
+    expect(model.getView().body).toEqual({ kind: "summary", summary: next });
   });
 
   test("setRefresh 透传控制器视图", () => {
@@ -241,10 +250,29 @@ describe("PanelModel 状态", () => {
       inFlight: true,
       manualLoading: false,
       hasLoaded: true,
-      banner: null,
     };
     model.setRefresh(refresh);
     expect(model.getView().refresh).toBe(refresh);
+  });
+
+  test("公开视图只暴露渲染所需字段", () => {
+    const view = readyModel().getView();
+    expect(Object.keys(view).sort()).toEqual([
+      "body",
+      "breakdown",
+      "focus",
+      "items",
+      "layer",
+      "layout",
+      "notice",
+      "preview",
+      "refresh",
+      "selectedCategory",
+      "sessionID",
+      "status",
+      "summary",
+      "zoom",
+    ]);
   });
 });
 
@@ -258,7 +286,6 @@ describe("PanelModel 会话切换", () => {
     const view = model.getView();
     expect(view.sessionID).toBe("ses_two");
     expect(view.summary).toBeNull();
-    expect(view.summaryProblem).toBeNull();
     expect(placeholder(view)).toMatchObject({ titleKey: "waitingForFirstRequestTitle" });
   });
 
@@ -269,7 +296,7 @@ describe("PanelModel 会话切换", () => {
     model.setSummary(next);
     model.setSession("ses_one", true);
     const view = model.getView();
-    expect(view.busy).toBe(true);
+    expect(view.sessionID).toBe("ses_one");
     expect(view.summary).toBe(next);
   });
 });

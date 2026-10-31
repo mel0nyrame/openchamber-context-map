@@ -16,4 +16,4 @@ An outdated Collector only produces a warning; it is never updated automatically
 
 **Consequences**
 
-Messages live in `src/panel/failure.ts` (host failures) and in the state branches of `src/panel/main.ts` (Collector and request failures). When adding an error code, change both the Service mapping and the panel's layers; changing only one lets the status code fall into "unexpected result".
+Messages live in `src/panel/failure.ts` (host failures) and in the panel model's body state (`src/panel/model.ts`, Collector and request failures). When adding an error code, change both the Service mapping and the panel's layers; changing only one lets the status code fall into "unexpected result".
