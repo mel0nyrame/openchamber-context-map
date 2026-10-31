@@ -42,17 +42,9 @@ import {
   previewTruncated,
 } from "./preview.ts";
 import {
-  busyChanged,
-  initialRefreshState,
-  pollDelay,
-  refreshBanner,
-  refreshFailed,
-  refreshSucceeded,
-  sessionChanged,
-  sessionPhaseChanged,
-  visibilityChanged,
-  type RefreshState,
-  type RefreshTrigger,
+  createRefreshController,
+  type RefreshRunContext,
+  type RefreshView,
 } from "./refresh.ts";
 
 const STYLE = `
@@ -433,20 +425,23 @@ root.append(bannerSlot, versionSlot, usage, mapCard, breakdownCard, placeholder)
 let panelState: PanelState = { kind: "checking" };
 let session: SessionSnapshot | null = null;
 let connected = false;
-let booted = false;
 let summary: SnapshotSummary | null = null;
 type SummaryProblem = "timeout" | "other";
 let summaryProblem: SummaryProblem | null = null;
 let hostProblem: HostFailureCopy | null = null;
 let collectorReason: "not_found" | "unreachable" | null = null;
 let collectorOutdated: { version: string; expectedVersion: string } | null = null;
-let refreshState: RefreshState = initialRefreshState(document.visibilityState !== "hidden");
-let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-let refreshInFlight = false;
-let refreshToken = 0;
-let queuedRefresh: RefreshTrigger | null = null;
-let manualLoading = false;
-let started = false;
+
+let refreshView: RefreshView;
+const refreshController = createRefreshController({
+  visible: document.visibilityState !== "hidden",
+  run: (context) => refreshOnce(context),
+  onChange: (view) => {
+    refreshView = view;
+    syncRetryControls();
+  },
+});
+refreshView = refreshController.getView();
 
 interface CellTarget {
   cell: MapCell;
@@ -706,7 +701,7 @@ function showPlaceholder(headline: string, detail: string, retry = false): void 
 function renderContent(): void {
   renderUpdated();
   renderVersionBanner();
-  if (!booted) {
+  if (!refreshView.hasLoaded) {
     showPlaceholder(
       t(currentLocale, "connectingTitle"),
       t(currentLocale, "connectingDetail"),
@@ -1341,7 +1336,7 @@ async function openPreview(entry: ItemSummary): Promise<void> {
         renderBreakdown();
         return;
       }
-      await handlePreviewMissing(request);
+      handlePreviewMissing(request);
       return;
     }
     if (result.status !== 200) {
@@ -1384,7 +1379,7 @@ async function openPreview(entry: ItemSummary): Promise<void> {
   }
 }
 
-async function handlePreviewMissing(request: number): Promise<void> {
+function handlePreviewMissing(request: number): void {
   if (request !== previewRequest) return;
   preview = null;
   previewRequest += 1;
@@ -1394,9 +1389,7 @@ async function handlePreviewMissing(request: number): Promise<void> {
   renderBreakdown();
   if (selectedCategory) focusItemById(focusedItemId, fallback);
 
-  await runRefresh("event");
-  renderContent();
-  if (selectedCategory) focusItemById(focusedItemId, fallback);
+  refreshController.refresh("event");
 }
 
 async function copyPreview(): Promise<void> {
@@ -1578,18 +1571,11 @@ function setSession(next: SessionSnapshot | null): void {
   const nextID = next?.id ?? null;
 
   if (nextID === previous) {
-    refreshState = busyChanged(refreshState, next?.busy ?? false);
-    reconcilePolling();
+    refreshController.setSession(nextID, next?.busy ?? false);
     return;
   }
 
-  refreshState = sessionChanged(refreshState, nextID, next?.busy ?? false);
-  // 旧 session 的请求已经没用了：作废它，立刻为新 session 拉一次。
-  refreshToken += 1;
-  refreshInFlight = false;
-  queuedRefresh = null;
-  setManualLoading(false);
-  stopPollTimer();
+  // 旧 session 的数据先清掉，再让控制器作废旧请求并决定是否拉新的一份。
   summary = null;
   summaryProblem = null;
   selectedCategory = null;
@@ -1607,20 +1593,13 @@ function setSession(next: SessionSnapshot | null): void {
   resetCopyFeedback();
   breakdownBody.replaceChildren();
   hideTooltip();
+  refreshController.setSession(nextID, next?.busy ?? false);
   renderContent();
-  renderRefreshBanner();
-
-  if (started && nextID !== null) requestRefresh("event", true);
-}
-
-function stopPollTimer(): void {
-  if (refreshTimer === null) return;
-  clearTimeout(refreshTimer);
-  refreshTimer = null;
+  if (nextID !== null) refreshController.refresh("event");
 }
 
 function renderRefreshBanner(): void {
-  const next = refreshBanner(refreshState);
+  const next = refreshView.banner;
   bannerSlot.hidden = next === null;
   if (next !== null) {
     // 请求在途时收起 banner 的重试入口，避免和顶部/占位区按钮重复触发。
@@ -1628,7 +1607,7 @@ function renderRefreshBanner(): void {
       tone: next.tone,
       title: t(currentLocale, next.titleKey),
       body: t(currentLocale, next.bodyKey),
-      action: manualLoading || refreshInFlight
+      action: refreshView.manualLoading || refreshView.inFlight
         ? undefined
         : { label: t(currentLocale, "retry"), onClick: () => manualRefresh() },
     });
@@ -1636,102 +1615,26 @@ function renderRefreshBanner(): void {
 }
 
 function syncRetryControls(): void {
-  const busy = manualLoading || refreshInFlight;
-  refreshButton.update({ disabled: busy, loading: manualLoading });
+  const busy = refreshView.manualLoading || refreshView.inFlight;
+  refreshButton.update({ disabled: busy, loading: refreshView.manualLoading });
   placeholderRetry.update({
     disabled: busy,
-    loading: manualLoading,
-    label: manualLoading ? t(currentLocale, "retrying") : t(currentLocale, "retry"),
+    loading: refreshView.manualLoading,
+    label: refreshView.manualLoading ? t(currentLocale, "retrying") : t(currentLocale, "retry"),
   });
   renderRefreshBanner();
 }
 
-function setManualLoading(loading: boolean): void {
-  if (manualLoading === loading) return;
-  manualLoading = loading;
-  syncRetryControls();
-}
-
-/**
- * 只保留一个计时器：每次轮询结束后再按策略挂下一次。
- * 切换 session、转入 idle、连续失败或面板隐藏都会走到这里清掉它。
- */
-function reconcilePolling(): void {
-  renderRefreshBanner();
-  if (refreshInFlight) return;
-
-  const delay = pollDelay(refreshState);
-  if (delay === null) {
-    stopPollTimer();
-    return;
-  }
-  if (refreshTimer !== null) return;
-
-  refreshTimer = setTimeout(() => {
-    refreshTimer = null;
-    requestRefresh("poll");
-  }, delay);
-}
-
 function manualRefresh(): void {
-  if (!started || manualLoading) return;
-  // 在途时排队而不是叠加：连续点击只会留下一次手动刷新。
-  requestRefresh("manual");
+  // 在途时由控制器排队，连续点击只会留下一次手动刷新。
+  refreshController.refresh("manual");
 }
 
-function requestRefresh(trigger: RefreshTrigger, supersede = false): void {
-  if (refreshInFlight && !supersede) {
-    if (trigger === "manual" || queuedRefresh === null) queuedRefresh = trigger;
-    return;
-  }
-  void runRefresh(trigger);
-}
-
-async function runRefresh(trigger: RefreshTrigger): Promise<void> {
-  const token = ++refreshToken;
-  const sessionAtStart = refreshState.sessionID;
-  // 首次加载和手动刷新要显示失败；之后的单次轮询/事件失败静默保留旧内容。
-  const quiet = trigger !== "manual" && booted;
-  refreshInFlight = true;
-  if (trigger === "manual") {
-    setManualLoading(true);
-  } else {
-    syncRetryControls();
-  }
-
-  let ok = false;
-  try {
-    ok = await refreshOnce(token, quiet);
-  } catch {
-    ok = false;
-  } finally {
-    // 已被更新的请求（切 session 或手动刷新）取代：结果和 loading 都交给新请求。
-    if (token !== refreshToken) return;
-
-    refreshInFlight = false;
-    if (trigger === "manual") {
-      setManualLoading(false);
-    } else {
-      syncRetryControls();
-    }
-    // 请求期间切走了 session：这次结果属于上一个 session，不计数也不清计数。
-    if (refreshState.sessionID === sessionAtStart) {
-      refreshState = ok ? refreshSucceeded(refreshState) : refreshFailed(refreshState, trigger);
-    }
-    renderRefreshBanner();
-
-    const next = queuedRefresh;
-    queuedRefresh = null;
-    if (next !== null && !(next === "poll" && pollDelay(refreshState) === null)) {
-      void runRefresh(next);
-      return;
-    }
-    reconcilePolling();
-  }
-}
-
-function noteUnreachable(error: unknown, unexpected = false): void {
-  booted = true;
+function noteUnreachable(
+  context: RefreshRunContext,
+  error: unknown,
+  unexpected = false,
+): void {
   // 已经有数据时静默保留内容，连续失败由 banner 统一提示；
   // 但连接指示必须诚实反映当前 host / Service 状态。
   if (!isBlockingHostFailure(error) && (summary !== null || connected)) {
@@ -1749,6 +1652,7 @@ function noteUnreachable(error: unknown, unexpected = false): void {
   hostProblem = unexpected
     ? { titleKey: "unexpectedServiceTitle", detailKey: "unexpectedServiceDetail" }
     : failureOf(error);
+  context.markLoaded();
   renderStatus({
     kind: "failed",
     titleKey: hostProblem.titleKey,
@@ -1758,16 +1662,17 @@ function noteUnreachable(error: unknown, unexpected = false): void {
 }
 
 /** 拉一次 /health 和当前 session 的 /summary；返回这次刷新是否成功。 */
-async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
+async function refreshOnce(context: RefreshRunContext): Promise<boolean> {
+  const quiet = context.quiet;
   let health: { status: number; body: string };
   try {
     health = await host.serviceRequest({ method: "GET", path: "/health" });
   } catch (error) {
-    if (token !== refreshToken) return true;
-    noteUnreachable(error);
+    if (!context.isCurrent()) return true;
+    noteUnreachable(context, error);
     return false;
   }
-  if (token !== refreshToken) return true;
+  if (!context.isCurrent()) return true;
 
   let body: HealthBody | null = null;
   try {
@@ -1777,7 +1682,7 @@ async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
   }
 
   if (health.status !== 200 || !body?.collector) {
-    noteUnreachable(null, true);
+    noteUnreachable(context, null, true);
     return false;
   }
 
@@ -1789,7 +1694,7 @@ async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
     summaryProblem = null;
     collectorOutdated = null;
     collectorReason = collector.reason === "unreachable" ? "unreachable" : "not_found";
-    booted = true;
+    context.markLoaded();
     renderStatus({ kind: "disconnected", reason: collectorReason });
     renderContent();
     return true;
@@ -1810,32 +1715,21 @@ async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
     expectedVersion: collectorOutdated?.expectedVersion,
   });
 
-  const current = session;
-  if (!current) {
-    summary = null;
-    summaryProblem = null;
-    booted = true;
-    renderContent();
-    return true;
-  }
-
-  const requestedSession = current.id;
   try {
     const result = await host.serviceRequest({
       method: "GET",
       path: "/summary",
-      query: { sessionID: requestedSession },
+      query: { sessionID: context.sessionID },
     });
-    // 请求期间切走了 session 或被新请求取代：旧结果直接丢弃，不算失败。
-    if (token !== refreshToken) return true;
-    if (session?.id !== requestedSession) return true;
+    // 请求期间切走了 session：旧结果直接丢弃，不算失败。
+    if (!context.isCurrent()) return true;
 
     if (result.status === 200) {
       const parsed = parseSummary(result.body);
       if (parsed === null) {
         if (!quiet) {
           summaryProblem = summary === null ? "other" : null;
-          booted = true;
+          context.markLoaded();
           renderContent();
         }
         return false;
@@ -1851,7 +1745,7 @@ async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
       summary = null;
       summaryProblem = null;
       collectorReason = "not_found";
-      booted = true;
+      context.markLoaded();
       renderStatus({ kind: "disconnected", reason: "not_found" });
       renderContent();
       return false;
@@ -1862,42 +1756,36 @@ async function refreshOnce(token: number, quiet: boolean): Promise<boolean> {
           : summary === null
             ? "other"
             : null;
-        booted = true;
+        context.markLoaded();
         renderContent();
       }
       return false;
     }
   } catch {
-    if (token !== refreshToken) return true;
-    if (session?.id !== requestedSession) return true;
+    if (!context.isCurrent()) return true;
     if (!quiet) {
       summaryProblem = summary === null ? "other" : null;
-      booted = true;
+      context.markLoaded();
       renderContent();
     }
     return false;
   }
 
-  booted = true;
+  context.markLoaded();
   renderContent();
   return true;
-}
-
-function applyVisibility(visible: boolean): void {
-  refreshState = visibilityChanged(refreshState, visible);
-  reconcilePolling();
 }
 
 // SDK 2.5.3 没有面板可见性或卸载回调。iframe 被移除时计时器随文档销毁；
 // 顶层页面隐藏/恢复用 visibilitychange，bfcache 用 pagehide/pageshow。
 document.addEventListener("visibilitychange", () => {
-  applyVisibility(document.visibilityState !== "hidden");
+  refreshController.setVisible(document.visibilityState !== "hidden");
 });
 window.addEventListener("pagehide", () => {
-  stopPollTimer();
+  refreshController.setVisible(false);
 });
 window.addEventListener("pageshow", () => {
-  applyVisibility(document.visibilityState !== "hidden");
+  refreshController.setVisible(document.visibilityState !== "hidden");
 });
 
 host.onSession((next) => {
@@ -1905,16 +1793,8 @@ host.onSession((next) => {
 });
 
 host.onSessionLifecycle((event) => {
-  const previous = refreshState;
-  refreshState = sessionPhaseChanged(refreshState, event.sessionId, event.phase);
-  if (refreshState !== previous) {
-    if (!refreshState.busy) stopPollTimer();
-    renderRefreshBanner();
-  }
-
-  if (!started || event.sessionId !== session?.id) return;
-  // started 立刻拉一次并进入 2 秒轮询；completed/failure 拉完最后一份就停。
-  requestRefresh("event");
+  // 控制器负责忙碌状态、空闲时停表，以及为当前 session 请求事件刷新。
+  refreshController.setLifecycle(event.sessionId, event.phase);
 });
 
 host.onReady((context) => {
@@ -1926,11 +1806,6 @@ host.onReady((context) => {
     renderContent();
   }
   setSession(context.session);
-  if (started) {
-    reconcilePolling();
-    return;
-  }
-  started = true;
-  requestRefresh("event");
+  refreshController.start();
 });
 

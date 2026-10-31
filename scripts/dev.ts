@@ -357,6 +357,7 @@ const harness = `<!doctype html>
   <button data-action="request">模拟请求</button>
   <button data-action="panel-refresh">刷新面板</button>
   <button data-action="double-refresh">连点两次</button>
+  <button data-action="late-response">迟到响应</button>
   <button data-action="service-down">停 Service</button>
   <button data-action="service-up">起 Service</button>
   <button data-action="collector-down">停 Collector</button>
@@ -389,6 +390,7 @@ const harness = `<!doctype html>
   let hostError = null;
   let collectorStuck = false;
   let collectorOutdated = false;
+  let lateSummary = false;
   let summaryRequests = 0;
   const ready = {
     channel: CHANNEL,
@@ -428,6 +430,7 @@ const harness = `<!doctype html>
       hostError ? "host:" + hostError : null,
       collectorStuck ? "Collector 卡住" : null,
       collectorOutdated ? "版本过旧" : null,
+      lateSummary ? "迟到响应待发" : null,
       summaryRequests > 0 ? "summary 请求 " + summaryRequests : null,
       panelRefreshButton && panelRefreshButton.disabled ? "刷新按钮已禁用" : null,
     ].filter(Boolean).join("，");
@@ -471,6 +474,8 @@ const harness = `<!doctype html>
         reply(message.id, { status: 504, body: JSON.stringify({ error: "collector_timeout" }) });
         return;
       }
+      const holdLate = lateSummary && request.path === "/summary";
+      if (holdLate) lateSummary = false;
       try {
         const init = { method: request.method || "GET" };
         if (request.body !== undefined) {
@@ -492,6 +497,20 @@ const harness = `<!doctype html>
           } catch {
             // 保持原响应，方便排查。
           }
+        }
+        if (holdLate) {
+          // 旧 session 的请求先挂起：300ms 后切到 Session B，1.8s 后才回包。
+          setTimeout(() => {
+            currentName = "Session B";
+            current = { ...sessions.b };
+            send("session", { session: current });
+            renderState("迟到响应：已切到 Session B");
+          }, 300);
+          setTimeout(() => {
+            reply(message.id, { status: result.status, body: result.body });
+            renderState("迟到响应：旧结果已回包");
+          }, 1_800);
+          return;
         }
         reply(message.id, { status: result.status, body: result.body });
       } catch (error) {
@@ -546,6 +565,15 @@ const harness = `<!doctype html>
         button.click();
         button.click();
         note = "已连点两次";
+      }
+    } else if (action === "late-response") {
+      lateSummary = true;
+      const button = findPanelRefresh();
+      if (button) {
+        button.click();
+        note = "迟到响应：已发请求";
+      } else {
+        note = "未找到刷新按钮";
       }
     } else if (action === "service-down") {
       await fetch("/__dev/service/down", { method: "POST" });
