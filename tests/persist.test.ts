@@ -73,6 +73,48 @@ test("版本不符、损坏与超过 7 天的文件会被删除", async () => {
   expect(await readdir(root)).toEqual([]);
 });
 
+test("旧文件缺少 restored 时按 false 读回", async () => {
+  const root = await makeDir();
+  const { restored: _restored, ...legacy } = summary("ses_legacy");
+  await writeFile(
+    join(root, "ses_legacy.json"),
+    JSON.stringify({ schemaVersion: 1, summary: legacy }),
+    "utf8",
+  );
+
+  const [loaded] = await readSnapshots(root);
+  expect(loaded?.restored).toBe(false);
+});
+
+test("重复分类的持久化汇总被丢弃", async () => {
+  const root = await makeDir();
+  const input = summary("ses_duplicate");
+  input.categories = input.categories.map(() => input.categories[0]!);
+  await writeFile(
+    join(root, "ses_duplicate.json"),
+    JSON.stringify({ schemaVersion: 1, summary: input }),
+    "utf8",
+  );
+
+  expect(await readSnapshots(root)).toEqual([]);
+  expect(await readdir(root)).toEqual([]);
+});
+
+test("分类数不是 8 的汇总文件被丢弃，baseline 的 2 分类不落盘", async () => {
+  const root = await makeDir();
+  const input = summary("ses_baseline");
+  input.baseline = true;
+  input.categories = input.categories.slice(0, 2);
+  await writeFile(
+    join(root, "ses_baseline.json"),
+    JSON.stringify({ schemaVersion: 1, summary: input }),
+    "utf8",
+  );
+
+  expect(await readSnapshots(root)).toEqual([]);
+  expect(await readdir(root)).toEqual([]);
+});
+
 test("超过 20 份时按采集时间保留最新的", async () => {
   const root = await makeDir();
   const base = Date.now() - 60 * 60 * 1000;

@@ -450,6 +450,91 @@ async function enrichSnapshot(context, store, windows, record) {
 import { chmod as chmod2, mkdir as mkdir2, readdir as readdir2, readFile as readFile2, rename as rename2, rm as rm2, stat, writeFile as writeFile2 } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
 import { join as join2 } from "node:path";
+
+// src/shared/snapshot.ts
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+function isCategory(value) {
+  return typeof value === "string" && CATEGORIES.includes(value);
+}
+function parseCategoryUsage(value) {
+  if (!isRecord(value))
+    return null;
+  const { category, items, chars, tokens } = value;
+  if (!isCategory(category) || !isFiniteNumber(items) || !isFiniteNumber(chars) || !isFiniteNumber(tokens)) {
+    return null;
+  }
+  return { category, items, chars, tokens };
+}
+function parseItemSummary(value) {
+  if (!isRecord(value))
+    return null;
+  const { id, title, chars, head } = value;
+  if (typeof id !== "string" || typeof title !== "string" || !isFiniteNumber(chars) || typeof head !== "string") {
+    return null;
+  }
+  return { id, title, chars, head };
+}
+function parseSnapshotSummary(value) {
+  if (!isRecord(value))
+    return null;
+  const {
+    sessionID,
+    model,
+    used,
+    window,
+    windowAssumed,
+    estimated,
+    baseline,
+    collectedAt
+  } = value;
+  if (typeof sessionID !== "string" || sessionID.length === 0 || typeof model !== "string" || !isFiniteNumber(used) || !isFiniteNumber(window) || typeof windowAssumed !== "boolean" || typeof estimated !== "boolean" || typeof baseline !== "boolean" || typeof collectedAt !== "string" || !Number.isFinite(Date.parse(collectedAt))) {
+    return null;
+  }
+  const rawCategories = value.categories;
+  if (!Array.isArray(rawCategories) || rawCategories.length < 1 || rawCategories.length > CATEGORIES.length) {
+    return null;
+  }
+  const categories = [];
+  for (const entry of rawCategories) {
+    const category = parseCategoryUsage(entry);
+    if (!category)
+      return null;
+    categories.push(category);
+  }
+  if (new Set(categories.map((entry) => entry.category)).size !== categories.length) {
+    return null;
+  }
+  const rawItems = value.items;
+  if (!Array.isArray(rawItems))
+    return null;
+  const items = [];
+  for (const entry of rawItems) {
+    const item = parseItemSummary(entry);
+    if (!item)
+      return null;
+    items.push(item);
+  }
+  return {
+    sessionID,
+    model,
+    used,
+    window,
+    windowAssumed,
+    estimated,
+    baseline,
+    restored: value.restored === true,
+    collectedAt,
+    categories,
+    items
+  };
+}
+
+// src/collector/persist.ts
 var SNAPSHOT_SCHEMA_VERSION = 1;
 var MAX_SNAPSHOTS = 20;
 var MAX_SNAPSHOT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -469,36 +554,21 @@ function resolveSnapshotDir(env = process.env) {
     return join2(discovery, "snapshots");
   return join2(homedir2(), ".local", "state", "openchamber-context-map", "snapshots");
 }
-function isRecord(value) {
-  return typeof value === "object" && value !== null;
-}
-function isFiniteNumber(value) {
-  return typeof value === "number" && Number.isFinite(value);
-}
-function isItemSummary(value) {
-  if (!isRecord(value))
-    return false;
-  return typeof value.id === "string" && typeof value.title === "string" && isFiniteNumber(value.chars) && typeof value.head === "string";
-}
-function isCategoryUsage(value) {
-  if (!isRecord(value))
-    return false;
-  return typeof value.category === "string" && CATEGORIES.includes(value.category) && isFiniteNumber(value.items) && isFiniteNumber(value.chars) && isFiniteNumber(value.tokens);
-}
-function isSnapshotSummary(value) {
-  if (!isRecord(value))
-    return false;
-  return typeof value.sessionID === "string" && value.sessionID.length > 0 && typeof value.model === "string" && isFiniteNumber(value.used) && isFiniteNumber(value.window) && typeof value.windowAssumed === "boolean" && typeof value.estimated === "boolean" && typeof value.baseline === "boolean" && typeof value.collectedAt === "string" && Number.isFinite(Date.parse(value.collectedAt)) && Array.isArray(value.categories) && value.categories.length === CATEGORIES.length && value.categories.every(isCategoryUsage) && Array.isArray(value.items) && value.items.every(isItemSummary);
-}
 function snapshotFileName(sessionID) {
   return `${sessionID.replace(/[^A-Za-z0-9._-]/g, "_")}.json`;
 }
 async function readSnapshotFile(file) {
   try {
     const value = JSON.parse(await readFile2(file, "utf8"));
-    if (!isRecord(value) || value.schemaVersion !== SNAPSHOT_SCHEMA_VERSION)
+    if (typeof value !== "object" || value === null || Array.isArray(value))
       return null;
-    return isSnapshotSummary(value.summary) ? value.summary : null;
+    const record = value;
+    if (record.schemaVersion !== SNAPSHOT_SCHEMA_VERSION)
+      return null;
+    const summary = parseSnapshotSummary(record.summary);
+    if (!summary || summary.categories.length !== CATEGORIES.length)
+      return null;
+    return summary;
   } catch {
     return null;
   }
