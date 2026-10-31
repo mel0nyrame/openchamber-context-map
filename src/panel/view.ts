@@ -12,14 +12,12 @@ import {
   type SnapshotSummary,
 } from "../shared/types.ts";
 import {
-  breakdownSignature,
   compactNumber,
   formatNumber,
   formatPercent,
+  intlLocale,
   pad2,
   roundPercent,
-  snapshotSignature,
-  versionLabel,
 } from "./format.ts";
 import { CATEGORY_LABEL_KEYS, t, type Locale } from "./i18n.ts";
 import {
@@ -40,6 +38,7 @@ import {
 import { paletteCss } from "./palette.ts";
 import { PREVIEW_MAX_CHARS, moveFocus } from "./preview.ts";
 import { refreshBanner } from "./refresh.ts";
+import { breakdownSignature, snapshotSignature } from "./signature.ts";
 
 const STYLE = `
   html, body { margin: 0; background: transparent; color: var(--oc-fg); font: 12px/1.4 var(--oc-font); }
@@ -112,6 +111,8 @@ const STYLE = `
   .item-row:hover { background: color-mix(in srgb, var(--oc-fg) 7%, transparent); }
   .item-row:focus-visible { background: color-mix(in srgb, var(--oc-fg) 7%, transparent);
     outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: -2px; }
+  .item-row.is-selected { box-shadow: inset 2px 0 0 var(--oc-primary);
+    background: color-mix(in srgb, var(--oc-fg) 7%, transparent); }
   .item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .item-meta { color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   .drill-empty { padding: 8px 6px; color: var(--oc-muted); font-size: 11px; }
@@ -206,6 +207,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
   });
 
   const versionSlot = document.createElement("div");
+  versionSlot.dataset.versionBanner = "true";
   versionSlot.hidden = true;
   const versionBanner = mountBanner(versionSlot, {
     tone: "warning",
@@ -442,6 +444,24 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       return;
     }
 
+    // happy-dom 不实现按钮的原生键盘激活；这里统一补上 Enter/Space，
+    // 并阻止默认动作，避免真实浏览器里再触发一次 click。
+    if (
+      !event.defaultPrevented
+      && !event.repeat
+      && !event.metaKey
+      && !event.ctrlKey
+      && !event.altKey
+      && (event.key === "Enter" || event.key === " " || event.key === "Spacebar")
+    ) {
+      const target = event.target;
+      if (target instanceof HTMLButtonElement && !target.disabled) {
+        event.preventDefault();
+        target.click();
+        return;
+      }
+    }
+
     const zTarget = event.target;
     const typing = zTarget instanceof HTMLElement
       && (zTarget.isContentEditable || zTarget.tagName === "INPUT" || zTarget.tagName === "TEXTAREA"
@@ -518,6 +538,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     renderStatus(next.status);
     renderContent(next);
     if (next.body.kind === "summary") renderBreakdown(previous, next);
+    applyItemSelection(next);
     syncCopyTimer(next);
     applyFocusTransition(previous, next);
     syncRetryControls();
@@ -538,14 +559,9 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
 
   function renderStatus(state: PanelState): void {
     statusInline.dataset.state = state.kind;
-    const version = state.kind === "checking"
-      ? "…"
-      : state.kind === "connected"
-        ? versionLabel(state.version)
-        : "—";
-    statusVersion.textContent = version;
-    const title = t(currentLocale, state.titleKey, state.args);
-    const detail = t(currentLocale, state.detailKey, state.args);
+    statusVersion.textContent = state.versionText;
+    const title = t(currentLocale, state.titleKey, state.titleArgs);
+    const detail = t(currentLocale, state.detailKey, state.detailArgs);
     const full = `${title} · ${detail}`;
     statusInline.title = full;
     statusInline.setAttribute("aria-label", full);
@@ -589,8 +605,8 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       tone: "warning",
       title: t(currentLocale, "versionOutdatedTitle"),
       body: t(currentLocale, "versionOutdatedBody", {
-        version: versionLabel(status.version),
-        expected: versionLabel(status.expectedVersion),
+        version: status.versionText,
+        expected: status.expectedText,
       }),
     });
   }
@@ -628,12 +644,8 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       return;
     }
     showPlaceholder(
-      body.args === undefined
-        ? t(currentLocale, body.titleKey)
-        : t(currentLocale, body.titleKey, body.args),
-      body.args === undefined
-        ? t(currentLocale, body.detailKey)
-        : t(currentLocale, body.detailKey, body.args),
+      t(currentLocale, body.titleKey, body.titleArgs),
+      t(currentLocale, body.detailKey, body.detailArgs),
       body.retry,
     );
   }
@@ -681,7 +693,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       ? `${label}${t(currentLocale, "restoredSuffix")}`
       : label;
     updated.title = t(currentLocale, "collectedAtTitle", {
-      date: date.toLocaleString(currentLocale === "zh" ? "zh-CN" : "en-US", { hour12: false }),
+      date: date.toLocaleString(intlLocale(currentLocale), { hour12: false }),
     });
   }
 
@@ -940,6 +952,17 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       const active = activeCells?.has(index) === true;
       element.classList.toggle("is-active", active);
       element.classList.toggle("is-dim", selected !== null && !active);
+    }
+  }
+
+  /** 条目列表里只有模型选中的那一条带可见标记；方向键移动焦点时同步更新。 */
+  function applyItemSelection(current: PanelView): void {
+    const selected = current.focus.itemId;
+    for (const button of itemButtons) {
+      const active = selected !== null && button.dataset.itemId === selected;
+      button.classList.toggle("is-selected", active);
+      if (active) button.setAttribute("aria-current", "true");
+      else button.removeAttribute("aria-current");
     }
   }
 

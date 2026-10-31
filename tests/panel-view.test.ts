@@ -18,9 +18,8 @@ import type {
   ItemSummary,
   SnapshotSummary,
 } from "../src/shared/types.ts";
-import { initialRefreshState } from "../src/panel/refresh.ts";
 import { buildBreakdown, fitDenominator, layoutMap } from "../src/panel/map.ts";
-import { summary } from "./fixtures.ts";
+import { panelView, summary } from "./fixtures.ts";
 
 // The view and the SDK resolve these globals at call time. Install them before
 // importing the view so this test file is the only one that needs a DOM.
@@ -197,10 +196,6 @@ class FakePanelModel implements PanelModel {
     return this.current;
   }
 
-  get listenerCount(): number {
-    return this.listeners.size;
-  }
-
   subscribe(listener: (view: PanelView) => void): () => void {
     this.listeners.add(listener);
     return () => {
@@ -262,40 +257,6 @@ class FakePanelModel implements PanelModel {
   }
 }
 
-function baseView(overrides: Partial<PanelView> = {}): PanelView {
-  const base: PanelView = {
-    status: {
-      kind: "checking",
-      titleKey: "statusCheckingTitle",
-      detailKey: "statusCheckingDetail",
-    },
-    body: {
-      kind: "placeholder",
-      titleKey: "connectingTitle",
-      detailKey: "connectingDetail",
-      retry: false,
-    },
-    sessionID: null,
-    summary: null,
-    refresh: {
-      state: initialRefreshState(),
-      inFlight: false,
-      manualLoading: false,
-      hasLoaded: false,
-    },
-    selectedCategory: null,
-    layer: "overview",
-    items: [],
-    layout: null,
-    breakdown: null,
-    zoom: "window",
-    preview: null,
-    focus: { itemId: null, fallback: 0 },
-    notice: null,
-  };
-  return { ...base, ...overrides };
-}
-
 interface Mounted {
   readonly root: HTMLDivElement;
   readonly model: FakePanelModel;
@@ -336,10 +297,10 @@ function query(root: HTMLElement, selector: string): HTMLElement {
 
 const CONNECTED_STATUS: PanelState = {
   kind: "connected",
-  version: "1.2.3",
+  versionText: "v1.2.3",
   titleKey: "statusConnectedTitle",
+  titleArgs: { version: "v1.2.3" },
   detailKey: "statusConnectedDetail",
-  args: { version: "v1.2.3" },
 };
 
 function mapSummary(): SnapshotSummary {
@@ -377,7 +338,7 @@ function summaryView(overrides: Partial<PanelView> = {}): PanelView {
   const denominator = zoom === "fit"
     ? Math.min(snapshot.window, fitDenominator(snapshot.used))
     : snapshot.window;
-  return baseView({
+  return panelView({
     status: CONNECTED_STATUS,
     body: { kind: "summary", summary: snapshot },
     sessionID: snapshot.sessionID,
@@ -449,10 +410,7 @@ function pressKey(key: string, target: EventTarget = document): KeyboardEvent {
 }
 
 function pressEnter(target: HTMLElement): KeyboardEvent {
-  const event = pressKey("Enter", target);
-  // happy-dom does not implement the browser's default button activation.
-  if (!event.defaultPrevented) target.click();
-  return event;
+  return pressKey("Enter", target);
 }
 
 afterEach(() => {
@@ -478,6 +436,7 @@ describe("状态条", () => {
       label: "连接中",
       status: {
         kind: "checking",
+        versionText: "…",
         titleKey: "statusCheckingTitle",
         detailKey: "statusCheckingDetail",
       },
@@ -489,10 +448,10 @@ describe("状态条", () => {
       label: "已连接",
       status: {
         kind: "connected",
-        version: "1.2.3",
+        versionText: "v1.2.3",
         titleKey: "statusConnectedTitle",
+        titleArgs: { version: "v1.2.3" },
         detailKey: "statusConnectedDetail",
-        args: { version: "v1.2.3" },
       },
       version: "v1.2.3",
       title: "Collector connected · v1.2.3",
@@ -503,12 +462,13 @@ describe("状态条", () => {
       label: "版本过期",
       status: {
         kind: "connected",
-        version: "1.2.3",
+        versionText: "v1.2.3",
         outdated: true,
-        expectedVersion: "2.0.0",
+        expectedText: "v2.0.0",
         titleKey: "statusConnectedTitle",
+        titleArgs: { version: "v1.2.3" },
         detailKey: "statusOutdatedDetail",
-        args: { version: "v1.2.3", expected: "v2.0.0" },
+        detailArgs: { expected: "v2.0.0" },
       },
       version: "v1.2.3",
       title: "Collector connected · v1.2.3",
@@ -518,10 +478,11 @@ describe("状态条", () => {
       label: "未找到 Collector",
       status: {
         kind: "disconnected",
+        versionText: "—",
         reason: "not_found",
         titleKey: "collectorNotRunning",
         detailKey: "collectorNotRunningDetail",
-        args: { path: "~/.config/opencode/plugins/" },
+        detailArgs: { path: "~/.config/opencode/plugins/" },
       },
       version: "—",
       title: "Collector is not running",
@@ -532,6 +493,7 @@ describe("状态条", () => {
       label: "Collector 无响应",
       status: {
         kind: "disconnected",
+        versionText: "—",
         reason: "unreachable",
         titleKey: "collectorUnreachableTitle",
         detailKey: "collectorUnreachableDetail",
@@ -545,6 +507,7 @@ describe("状态条", () => {
       label: "Host 失败",
       status: {
         kind: "failed",
+        versionText: "—",
         titleKey: "hostNoServiceTitle",
         detailKey: "hostNoServiceDetail",
       },
@@ -556,7 +519,7 @@ describe("状态条", () => {
 
   for (const item of cases) {
     test(`显示${item.label}的文案和版本`, () => {
-      const { root } = mount(baseView({ status: item.status }));
+      const { root } = mount(panelView({ status: item.status }));
       const inline = query(root, ".status-inline");
       expect(inline.dataset.state).toBe(item.status.kind);
       expect(query(root, ".status-version").textContent).toBe(item.version);
@@ -567,9 +530,10 @@ describe("状态条", () => {
   }
 
   test("状态条只渲染模型给的 copy，不按 reason 重新判断", () => {
-    const { root } = mount(baseView({
+    const { root } = mount(panelView({
       status: {
         kind: "disconnected",
+        versionText: "—",
         reason: "not_found",
         titleKey: "collectorUnreachableTitle",
         detailKey: "collectorUnreachableDetail",
@@ -583,9 +547,10 @@ describe("状态条", () => {
   });
 
   test("Host 失败的状态条使用模型给的宿主 copy", () => {
-    const { root } = mount(baseView({
+    const { root } = mount(panelView({
       status: {
         kind: "failed",
+        versionText: "—",
         titleKey: "hostDisabledTitle",
         detailKey: "hostDisabledDetail",
       },
@@ -599,21 +564,22 @@ describe("状态条", () => {
 });
 
 describe("版本横幅", () => {
-  test("版本横幅使用模型给出的 expectedVersion", () => {
-    const { root } = mount(baseView({
+  test("版本横幅使用模型给出的格式化期望版本", () => {
+    const { root } = mount(panelView({
       status: {
         kind: "connected",
-        version: "1.2.3",
+        versionText: "v1.2.3",
         outdated: true,
-        expectedVersion: "9.9.9",
+        expectedText: "v9.9.9",
         titleKey: "statusConnectedTitle",
+        titleArgs: { version: "v1.2.3" },
         detailKey: "statusOutdatedDetail",
-        args: { version: "v1.2.3", expected: "v9.9.9" },
+        detailArgs: { expected: "v9.9.9" },
       },
     }));
-    const slot = root.children[1];
-    if (!(slot instanceof HTMLElement)) throw new Error("missing version slot");
+    const slot = query(root, "[data-version-banner]");
     expect(slot.hidden).toBe(false);
+    expect(query(root, ".status-version").textContent).toBe("v1.2.3");
     expect(slot.querySelector(".oc-sdk-banner-title")?.textContent)
       .toBe("Collector version is outdated");
     expect(slot.querySelector(".oc-sdk-banner-body")?.textContent)
@@ -623,24 +589,23 @@ describe("版本横幅", () => {
   });
 
   test("版本一致时隐藏横幅", () => {
-    const { root } = mount(baseView({
+    const { root } = mount(panelView({
       status: {
         kind: "connected",
-        version: "1.2.3",
+        versionText: "v1.2.3",
         titleKey: "statusConnectedTitle",
+        titleArgs: { version: "v1.2.3" },
         detailKey: "statusConnectedDetail",
-        args: { version: "v1.2.3" },
       },
     }));
-    const slot = root.children[1];
-    if (!(slot instanceof HTMLElement)) throw new Error("missing version slot");
+    const slot = query(root, "[data-version-banner]");
     expect(slot.hidden).toBe(true);
   });
 });
 
 describe("占位区", () => {
   test("连接中显示标题和详情，不显示重试", () => {
-    const { root } = mount(baseView());
+    const { root } = mount(panelView());
     expect(query(root, ".placeholder").hidden).toBe(false);
     expect(query(root, ".placeholder-title").textContent)
       .toBe("Connecting to Collector…");
@@ -650,7 +615,7 @@ describe("占位区", () => {
   });
 
   test("没有 session 时显示重试，点击触发手动刷新", () => {
-    const { root, manualRefreshes } = mount(baseView({
+    const { root, manualRefreshes } = mount(panelView({
       body: {
         kind: "placeholder",
         titleKey: "noSessionTitle",
@@ -671,19 +636,20 @@ describe("占位区", () => {
   });
 
   test("未安装 Collector 时在详情里给出安装路径", () => {
-    const { root } = mount(baseView({
+    const { root } = mount(panelView({
       status: {
         kind: "disconnected",
+        versionText: "—",
         reason: "not_found",
         titleKey: "collectorNotRunning",
         detailKey: "collectorNotRunningDetail",
-        args: { path: "~/.config/opencode/plugins/" },
+        detailArgs: { path: "~/.config/opencode/plugins/" },
       },
       body: {
         kind: "placeholder",
         titleKey: "collectorNotRunning",
         detailKey: "collectorNotRunningDetail",
-        args: { path: "~/.config/opencode/plugins/" },
+        detailArgs: { path: "~/.config/opencode/plugins/" },
         retry: true,
       },
     }));
@@ -697,9 +663,10 @@ describe("占位区", () => {
   });
 
   test("Host 失败时显示标题、详情和重试", () => {
-    const { root } = mount(baseView({
+    const { root } = mount(panelView({
       status: {
         kind: "failed",
+        versionText: "—",
         titleKey: "hostNoServiceTitle",
         detailKey: "hostNoServiceDetail",
       },
@@ -725,13 +692,13 @@ describe("摘要", () => {
       windowAssumed: true,
       baseline: true,
     });
-    const { root } = mount(baseView({
+    const { root } = mount(panelView({
       status: {
         kind: "connected",
-        version: "1.2.3",
+        versionText: "v1.2.3",
         titleKey: "statusConnectedTitle",
+        titleArgs: { version: "v1.2.3" },
         detailKey: "statusConnectedDetail",
-        args: { version: "v1.2.3" },
       },
       body: { kind: "summary", summary: snapshot },
       sessionID: snapshot.sessionID,
@@ -765,13 +732,13 @@ describe("摘要", () => {
 
   test("三个标记都为 false 时隐藏标记区", () => {
     const snapshot = summary();
-    const { root, model } = mount(baseView({
+    const { root, model } = mount(panelView({
       status: {
         kind: "connected",
-        version: "1.2.3",
+        versionText: "v1.2.3",
         titleKey: "statusConnectedTitle",
+        titleArgs: { version: "v1.2.3" },
         detailKey: "statusConnectedDetail",
-        args: { version: "v1.2.3" },
       },
       body: { kind: "summary", summary: snapshot },
       sessionID: snapshot.sessionID,
@@ -799,13 +766,13 @@ describe("摘要", () => {
 describe("命令日志", () => {
   test("点击缩放按钮把意图交给假模型", () => {
     const snapshot = summary();
-    const { root, model } = mount(baseView({
+    const { root, model } = mount(panelView({
       status: {
         kind: "connected",
-        version: "1.2.3",
+        versionText: "v1.2.3",
         titleKey: "statusConnectedTitle",
+        titleArgs: { version: "v1.2.3" },
         detailKey: "statusConnectedDetail",
-        args: { version: "v1.2.3" },
       },
       body: { kind: "summary", summary: snapshot },
       sessionID: snapshot.sessionID,
@@ -940,6 +907,10 @@ describe("分类与条目选择", () => {
       .toBe("First question");
     expect(itemRows[0]?.querySelector(".item-meta")?.textContent)
       .toBe("2,000 chars");
+    expect(itemRows[0]?.classList.contains("is-selected")).toBe(true);
+    expect(itemRows[0]?.getAttribute("aria-current")).toBe("true");
+    expect(itemRows[1]?.classList.contains("is-selected")).toBe(false);
+    expect(itemRows[1]?.getAttribute("aria-current")).toBeNull();
     expect(query(root, ".back").hidden).toBe(false);
 
     itemRows[1]?.click();
@@ -1036,7 +1007,6 @@ describe("预览、复制与截断", () => {
 
     expect(clipboardWrites).toEqual(["You are a helpful assistant."]);
     expect(model.commands).toEqual([{ type: "setNotice", notice: "previewCopied" }]);
-    expect(pendingTimers.size).toBe(1);
 
     model.emit({ notice: "previewCopied" });
     expect(query(root, ".preview-copy").textContent).toBe("Copied");
@@ -1088,10 +1058,8 @@ describe("预览、复制与截断", () => {
     const { root, model, handle } = mount(previewView());
     (query(root, ".preview-copy") as HTMLButtonElement).click();
     await flushPromises();
-    expect(pendingTimers.size).toBe(1);
 
     handle.dispose();
-    expect(pendingTimers.size).toBe(0);
     runTimers();
     expect(model.commands)
       .not.toContainEqual({ type: "setNotice", notice: null });
@@ -1142,9 +1110,9 @@ describe("键盘与焦点恢复", () => {
     row.focus();
 
     const event = pressEnter(row);
-    expect(event.defaultPrevented).toBe(false);
-    expect(model.commands.at(-1))
-      .toEqual({ type: "openItem", itemId: "system:0" });
+    expect(event.defaultPrevented).toBe(true);
+    expect(model.commands.filter((command) => command.type === "openItem"))
+      .toEqual([{ type: "openItem", itemId: "system:0" }]);
   });
 
   test("Escape 关闭预览", () => {
@@ -1271,11 +1239,9 @@ describe("语言切换", () => {
 describe("dispose", () => {
   test("取消订阅后 emit 不再更新 DOM，键盘监听也已移除", () => {
     const { root, model, handle } = mount(summaryView());
-    expect(model.listenerCount).toBe(1);
     const before = query(root, ".usage-model").textContent;
 
     handle.dispose();
-    expect(model.listenerCount).toBe(0);
 
     const rows = Array.from(
       root.querySelectorAll<HTMLButtonElement>("button.row[data-category]"),

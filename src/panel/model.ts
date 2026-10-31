@@ -40,27 +40,33 @@ export const COLLECTOR_INSTALL_PATH = "~/.config/opencode/plugins/";
 
 export type SummaryProblem = "timeout" | "other";
 
+/** 单条文案的参数；每条消息只拿自己用到的字段。 */
+type MessageArgs = Record<string, string | number>;
+
 /** 状态条文案：模型决定 key 和参数，视图只负责按 locale 翻译。 */
 export type PanelStatusCopy = {
   titleKey: MessageKey;
+  titleArgs?: MessageArgs;
   detailKey: MessageKey;
-  args?: Record<string, string | number>;
+  detailArgs?: MessageArgs;
+};
+
+/** 状态条右侧的版本文字；模型统一格式化，视图直接显示。 */
+type PanelStatusBase = PanelStatusCopy & {
+  versionText: string;
 };
 
 export type PanelState =
-  | ({ kind: "checking" } & PanelStatusCopy)
-  | ({ kind: "connected"; version: string } & PanelStatusCopy & (
-    | { outdated?: false; expectedVersion?: undefined }
-    | { outdated: true; expectedVersion: string }
+  | ({ kind: "checking" } & PanelStatusBase)
+  | ({ kind: "connected" } & PanelStatusBase & (
+    | { outdated?: false; expectedText?: undefined }
+    | { outdated: true; expectedText: string }
   ))
-  | ({ kind: "disconnected"; reason: "not_found" | "unreachable" } & PanelStatusCopy)
-  | ({ kind: "failed" } & PanelStatusCopy);
+  | ({ kind: "disconnected"; reason: "not_found" | "unreachable" } & PanelStatusBase)
+  | ({ kind: "failed" } & PanelStatusBase);
 
-export interface PlaceholderBody {
+export interface PlaceholderBody extends PanelStatusCopy {
   kind: "placeholder";
-  titleKey: MessageKey;
-  detailKey: MessageKey;
-  args?: Record<string, string | number>;
   retry: boolean;
 }
 
@@ -211,84 +217,92 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
     return {
       titleKey: "collectorNotRunning",
       detailKey: "collectorNotRunningDetail",
-      args: { path: COLLECTOR_INSTALL_PATH },
+      detailArgs: { path: COLLECTOR_INSTALL_PATH },
     };
   }
 
   function status(): PanelState {
     const failure = hostProblem ?? statusFailure;
     if (failure !== null) {
-      return { kind: "failed", titleKey: failure.titleKey, detailKey: failure.detailKey };
+      return {
+        kind: "failed",
+        versionText: "—",
+        titleKey: failure.titleKey,
+        detailKey: failure.detailKey,
+      };
     }
     if (!booted || connection === null) {
       return {
         kind: "checking",
+        versionText: "…",
         titleKey: "statusCheckingTitle",
         detailKey: "statusCheckingDetail",
       };
     }
     if (connection.connected && typeof connection.version === "string" && connection.version !== "") {
+      const versionText = versionLabel(connection.version);
       if (connection.outdated === true) {
-        const expectedVersion = connection.expectedVersion ?? COLLECTOR_VERSION;
+        const expectedText = versionLabel(connection.expectedVersion ?? COLLECTOR_VERSION);
         return {
           kind: "connected",
-          version: connection.version,
+          versionText,
           outdated: true,
-          expectedVersion,
+          expectedText,
           titleKey: "statusConnectedTitle",
+          titleArgs: { version: versionText },
           detailKey: "statusOutdatedDetail",
-          args: {
-            version: versionLabel(connection.version),
-            expected: versionLabel(expectedVersion),
-          },
+          detailArgs: { expected: expectedText },
         };
       }
       return {
         kind: "connected",
-        version: connection.version,
+        versionText,
         titleKey: "statusConnectedTitle",
+        titleArgs: { version: versionText },
         detailKey: "statusConnectedDetail",
-        args: { version: versionLabel(connection.version) },
       };
     }
     const reason = connection.reason === "unreachable" ? "unreachable" : "not_found";
-    return { kind: "disconnected", reason, ...collectorCopy(reason) };
+    return { kind: "disconnected", versionText: "—", reason, ...collectorCopy(reason) };
   }
 
-  function placeholder(
-    titleKey: MessageKey,
-    detailKey: MessageKey,
-    retry: boolean,
-    args?: Record<string, string | number>,
-  ): PlaceholderBody {
-    return args === undefined
-      ? { kind: "placeholder", titleKey, detailKey, retry }
-      : { kind: "placeholder", titleKey, detailKey, args, retry };
+  function placeholder(copy: PanelStatusCopy, retry: boolean): PlaceholderBody {
+    return { kind: "placeholder", ...copy, retry };
   }
 
   function body(): PanelBody {
     if (!booted) {
-      return placeholder("connectingTitle", "connectingDetail", false);
+      return placeholder({ titleKey: "connectingTitle", detailKey: "connectingDetail" }, false);
     }
     if (sessionID === null) {
-      return placeholder("noSessionTitle", "noSessionDetail", true);
+      return placeholder({ titleKey: "noSessionTitle", detailKey: "noSessionDetail" }, true);
     }
     if (hostProblem !== null) {
-      return placeholder(hostProblem.titleKey, hostProblem.detailKey, true);
+      return placeholder(
+        { titleKey: hostProblem.titleKey, detailKey: hostProblem.detailKey },
+        true,
+      );
     }
     if (connection !== null && !connection.connected) {
-      const copy = collectorCopy(
-        connection.reason === "unreachable" ? "unreachable" : "not_found",
-      );
-      return placeholder(copy.titleKey, copy.detailKey, true, copy.args);
+      const reason = connection.reason === "unreachable" ? "unreachable" : "not_found";
+      return placeholder(collectorCopy(reason), true);
     }
     if (summaryProblem !== null) {
       return summaryProblem === "timeout"
-        ? placeholder("summaryTimeoutTitle", "summaryTimeoutDetail", true)
-        : placeholder("summaryUnavailableTitle", "summaryUnavailableDetail", true);
+        ? placeholder(
+          { titleKey: "summaryTimeoutTitle", detailKey: "summaryTimeoutDetail" },
+          true,
+        )
+        : placeholder(
+          { titleKey: "summaryUnavailableTitle", detailKey: "summaryUnavailableDetail" },
+          true,
+        );
     }
     if (summary === null || summary.sessionID !== sessionID) {
-      return placeholder("waitingForFirstRequestTitle", "waitingForFirstRequestDetail", true);
+      return placeholder(
+        { titleKey: "waitingForFirstRequestTitle", detailKey: "waitingForFirstRequestDetail" },
+        true,
+      );
     }
     return { kind: "summary", summary };
   }

@@ -28,6 +28,7 @@ describe("PanelModel 内容优先级", () => {
     const view = createPanelModel().getView();
     expect(view.status).toEqual({
       kind: "checking",
+      versionText: "…",
       titleKey: "statusCheckingTitle",
       detailKey: "statusCheckingDetail",
     });
@@ -45,6 +46,7 @@ describe("PanelModel 内容优先级", () => {
     const view = model.getView();
     expect(view.status).toEqual({
       kind: "checking",
+      versionText: "…",
       titleKey: "statusCheckingTitle",
       detailKey: "statusCheckingDetail",
     });
@@ -75,6 +77,7 @@ describe("PanelModel 内容优先级", () => {
     const view = model.getView();
     expect(view.status).toEqual({
       kind: "failed",
+      versionText: "—",
       titleKey: "hostNoServiceTitle",
       detailKey: "hostNoServiceDetail",
     });
@@ -137,6 +140,7 @@ describe("PanelModel 内容优先级", () => {
     model.setHostProblem(null);
     expect(model.getView().status).toEqual({
       kind: "checking",
+      versionText: "…",
       titleKey: "statusCheckingTitle",
       detailKey: "statusCheckingDetail",
     });
@@ -148,6 +152,7 @@ describe("PanelModel 内容优先级", () => {
     const view = model.getView();
     expect(view.status).toEqual({
       kind: "disconnected",
+      versionText: "—",
       reason: "unreachable",
       titleKey: "collectorUnreachableTitle",
       detailKey: "collectorUnreachableDetail",
@@ -165,15 +170,16 @@ describe("PanelModel 内容优先级", () => {
     const view = model.getView();
     expect(view.status).toEqual({
       kind: "disconnected",
+      versionText: "—",
       reason: "not_found",
       titleKey: "collectorNotRunning",
       detailKey: "collectorNotRunningDetail",
-      args: { path: COLLECTOR_INSTALL_PATH },
+      detailArgs: { path: COLLECTOR_INSTALL_PATH },
     });
     expect(placeholder(view)).toMatchObject({
       titleKey: "collectorNotRunning",
       detailKey: "collectorNotRunningDetail",
-      args: { path: COLLECTOR_INSTALL_PATH },
+      detailArgs: { path: COLLECTOR_INSTALL_PATH },
       retry: true,
     });
   });
@@ -215,7 +221,7 @@ describe("PanelModel 内容优先级", () => {
 });
 
 describe("PanelModel 状态", () => {
-  test("connected 状态带版本、outdated 和期望版本", () => {
+  test("connected 状态带格式化版本、outdated 和期望版本", () => {
     const model = readyModel();
     model.setConnection({
       connected: true,
@@ -225,16 +231,17 @@ describe("PanelModel 状态", () => {
     });
     expect(model.getView().status).toEqual({
       kind: "connected",
-      version: "1.2.3",
+      versionText: "v1.2.3",
       outdated: true,
-      expectedVersion: "2.0.0",
+      expectedText: "v2.0.0",
       titleKey: "statusConnectedTitle",
+      titleArgs: { version: "v1.2.3" },
       detailKey: "statusOutdatedDetail",
-      args: { version: "v1.2.3", expected: "v2.0.0" },
+      detailArgs: { expected: "v2.0.0" },
     });
   });
 
-  test("outdated 的 expectedVersion 和文案参数来自模型", () => {
+  test("outdated 的期望版本和文案参数来自模型", () => {
     const model = readyModel();
     model.setConnection({
       connected: true,
@@ -244,12 +251,13 @@ describe("PanelModel 状态", () => {
     });
     expect(model.getView().status).toEqual({
       kind: "connected",
-      version: "1.2.3",
+      versionText: "v1.2.3",
       outdated: true,
-      expectedVersion: "9.9.9",
+      expectedText: "v9.9.9",
       titleKey: "statusConnectedTitle",
+      titleArgs: { version: "v1.2.3" },
       detailKey: "statusOutdatedDetail",
-      args: { version: "v1.2.3", expected: "v9.9.9" },
+      detailArgs: { expected: "v9.9.9" },
     });
   });
 
@@ -258,12 +266,13 @@ describe("PanelModel 状态", () => {
     model.setConnection({ connected: true, version: "1.2.3", outdated: true });
     expect(model.getView().status).toEqual({
       kind: "connected",
-      version: "1.2.3",
+      versionText: "v1.2.3",
       outdated: true,
-      expectedVersion: COLLECTOR_VERSION,
+      expectedText: `v${COLLECTOR_VERSION}`,
       titleKey: "statusConnectedTitle",
+      titleArgs: { version: "v1.2.3" },
       detailKey: "statusOutdatedDetail",
-      args: { version: "v1.2.3", expected: `v${COLLECTOR_VERSION}` },
+      detailArgs: { expected: `v${COLLECTOR_VERSION}` },
     });
   });
 
@@ -276,12 +285,14 @@ describe("PanelModel 状态", () => {
       const body = placeholder(view);
       expect({
         titleKey: view.status.titleKey,
+        titleArgs: view.status.titleArgs,
         detailKey: view.status.detailKey,
-        args: view.status.args,
+        detailArgs: view.status.detailArgs,
       }).toEqual({
         titleKey: body.titleKey,
+        titleArgs: body.titleArgs,
         detailKey: body.detailKey,
-        args: body.args,
+        detailArgs: body.detailArgs,
       });
     }
   });
@@ -292,6 +303,7 @@ describe("PanelModel 状态", () => {
     const view = model.getView();
     expect(view.status).toEqual({
       kind: "failed",
+      versionText: "—",
       titleKey: "hostDisabledTitle",
       detailKey: "hostDisabledDetail",
     });
@@ -309,6 +321,7 @@ describe("PanelModel 状态", () => {
     model.setConnection({ connected: false, reason: "unreachable" });
     expect(model.getView().status).toEqual({
       kind: "disconnected",
+      versionText: "—",
       reason: "unreachable",
       titleKey: "collectorUnreachableTitle",
       detailKey: "collectorUnreachableDetail",
@@ -316,6 +329,7 @@ describe("PanelModel 状态", () => {
     model.setConnection(null);
     expect(model.getView().status).toEqual({
       kind: "checking",
+      versionText: "…",
       titleKey: "statusCheckingTitle",
       detailKey: "statusCheckingDetail",
     });
