@@ -4,11 +4,11 @@ import { applyHostReady, mountBadge, mountBanner, mountButton, mountProgress } f
 import {
   CATEGORIES,
   type Category,
-  type CategoryUsage,
   type ItemSummary,
   type SnapshotItemDetail,
   type SnapshotSummary,
 } from "../shared/types.ts";
+import { parseSnapshotItemDetail, parseSnapshotSummary } from "../shared/snapshot.ts";
 import { COLLECTOR_VERSION } from "../shared/version.ts";
 import { describeHostFailure, type HostFailureCopy } from "./failure.ts";
 import {
@@ -1267,7 +1267,8 @@ function renderBreakdown(): void {
   list.append(free);
   breakdownBody.append(list);
 
-  if (activeCategory && isCategory(activeCategory)) focusCategoryRow(activeCategory);
+  const knownCategory = CATEGORIES.find((category) => category === activeCategory);
+  if (knownCategory) focusCategoryRow(knownCategory);
 }
 
 function renderPreview(state: PreviewState): void {
@@ -1448,17 +1449,7 @@ function copyWithExecCommand(text: string): boolean {
 
 function parseItemDetail(body: string): SnapshotItemDetail | null {
   try {
-    const value = JSON.parse(body) as unknown;
-    if (
-      !isRecord(value)
-      || typeof value.id !== "string"
-      || typeof value.title !== "string"
-      || typeof value.text !== "string"
-      || !isFiniteNumber(value.chars)
-    ) {
-      return null;
-    }
-    return value as unknown as SnapshotItemDetail;
+    return parseSnapshotItemDetail(JSON.parse(body) as unknown);
   } catch {
     return null;
   }
@@ -1506,60 +1497,9 @@ function renderSummary(next: SnapshotSummary): void {
   applySelection();
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function isCategory(value: unknown): value is Category {
-  return typeof value === "string" && (CATEGORIES as readonly string[]).includes(value);
-}
-
-function isCategoryUsage(value: unknown): value is CategoryUsage {
-  if (!isRecord(value)) return false;
-  return isCategory(value.category)
-    && isFiniteNumber(value.items)
-    && isFiniteNumber(value.chars)
-    && isFiniteNumber(value.tokens);
-}
-
-function isItemSummary(value: unknown): value is ItemSummary {
-  if (!isRecord(value)) return false;
-  return typeof value.id === "string"
-    && typeof value.title === "string"
-    && typeof value.head === "string"
-    && isFiniteNumber(value.chars);
-}
-
 function parseSummary(body: string): SnapshotSummary | null {
   try {
-    const value = JSON.parse(body) as unknown;
-    if (
-      !isRecord(value)
-      || typeof value.sessionID !== "string"
-      || typeof value.model !== "string"
-      || !isFiniteNumber(value.used)
-      || !isFiniteNumber(value.window)
-      || typeof value.windowAssumed !== "boolean"
-      || typeof value.estimated !== "boolean"
-      || (value.baseline !== undefined && typeof value.baseline !== "boolean")
-      || typeof value.collectedAt !== "string"
-      || !Array.isArray(value.categories)
-      || !value.categories.every(isCategoryUsage)
-      || !Array.isArray(value.items)
-      || !value.items.every(isItemSummary)
-    ) {
-      return null;
-    }
-    const parsed = value as unknown as SnapshotSummary;
-    return {
-      ...parsed,
-      baseline: value.baseline === true,
-      restored: value.restored === true,
-    };
+    return parseSnapshotSummary(JSON.parse(body) as unknown);
   } catch {
     return null;
   }
