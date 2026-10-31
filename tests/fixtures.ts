@@ -1,3 +1,5 @@
+import type { PanelView } from "../src/panel/model.ts";
+import { initialRefreshState } from "../src/panel/refresh.ts";
 import {
   CATEGORIES,
   type CategoryUsage,
@@ -34,3 +36,39 @@ export const connected = {
   connected: true,
   version: "1.2.3",
 } as const;
+
+/** 面板视图的最小可用默认值；各测试只覆盖自己关心的字段。 */
+export function panelView(overrides: Partial<PanelView> = {}): PanelView {
+  return {
+    status: {
+      kind: "checking",
+      versionText: "…",
+      titleKey: "statusCheckingTitle",
+      detailKey: "statusCheckingDetail",
+    },
+    body: {
+      kind: "placeholder",
+      titleKey: "connectingTitle",
+      detailKey: "connectingDetail",
+      retry: false,
+    },
+    sessionID: null,
+    summary: null,
+    refresh: {
+      state: initialRefreshState(),
+      inFlight: false,
+      manualLoading: false,
+      hasLoaded: false,
+    },
+    selectedCategory: null,
+    layer: "overview",
+    items: [],
+    layout: null,
+    breakdown: null,
+    zoom: "window",
+    preview: null,
+    focus: { itemId: null, fallback: 0 },
+    notice: null,
+    ...overrides,
+  };
+}

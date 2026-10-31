@@ -1,7 +1,7 @@
 /**
  * 面板视图：唯一构建 DOM、绑定事件、操作焦点与滚动、订阅模型并渲染
  * `PanelView` 的模块。视图只把用户意图翻译成模型命令，不判断内容优先级、
- * 失败分层、选择规则或预览令牌；这些都由模型负责。
+ * 失败分层、选择规则或预览令牌；状态文案由模型决定，视图只按 key 翻译。
  */
 
 import { mountBadge, mountBanner, mountButton, mountProgress } from "@openchamber/sdk/ui";
@@ -11,7 +11,14 @@ import {
   type Category,
   type SnapshotSummary,
 } from "../shared/types.ts";
-import { COLLECTOR_VERSION } from "../shared/version.ts";
+import {
+  compactNumber,
+  formatNumber,
+  formatPercent,
+  intlLocale,
+  pad2,
+  roundPercent,
+} from "./format.ts";
 import { CATEGORY_LABEL_KEYS, t, type Locale } from "./i18n.ts";
 import {
   COMPACT_COLUMNS,
@@ -22,7 +29,6 @@ import {
   type MapLayout,
 } from "./map.ts";
 import {
-  COLLECTOR_INSTALL_PATH,
   type PanelFocus,
   type PanelModel,
   type PanelState,
@@ -32,6 +38,7 @@ import {
 import { paletteCss } from "./palette.ts";
 import { PREVIEW_MAX_CHARS, moveFocus } from "./preview.ts";
 import { refreshBanner } from "./refresh.ts";
+import { breakdownSignature, snapshotSignature } from "./signature.ts";
 
 const STYLE = `
   html, body { margin: 0; background: transparent; color: var(--oc-fg); font: 12px/1.4 var(--oc-font); }
@@ -104,6 +111,8 @@ const STYLE = `
   .item-row:hover { background: color-mix(in srgb, var(--oc-fg) 7%, transparent); }
   .item-row:focus-visible { background: color-mix(in srgb, var(--oc-fg) 7%, transparent);
     outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: -2px; }
+  .item-row.is-selected { box-shadow: inset 2px 0 0 var(--oc-primary);
+    background: color-mix(in srgb, var(--oc-fg) 7%, transparent); }
   .item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .item-meta { color: var(--oc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   .drill-empty { padding: 8px 6px; color: var(--oc-muted); font-size: 11px; }
@@ -198,6 +207,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
   });
 
   const versionSlot = document.createElement("div");
+  versionSlot.dataset.versionBanner = "true";
   versionSlot.hidden = true;
   const versionBanner = mountBanner(versionSlot, {
     tone: "warning",
@@ -410,7 +420,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
 
   let currentFreeTokens = 0;
   let mapSignature: string | null = null;
-  let breakdownSignature: string | null = null;
+  let breakdownSignatureCache: string | null = null;
   let cellElements = new Map<number, HTMLButtonElement>();
   let hoveredCell: CellTarget | null = null;
   let pinnedCell: CellTarget | null = null;
@@ -432,6 +442,24 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       refreshTooltip();
       if (view.preview !== null || view.selectedCategory !== null) goBack();
       return;
+    }
+
+    // happy-dom 不实现按钮的原生键盘激活；这里统一补上 Enter/Space，
+    // 并阻止默认动作，避免真实浏览器里再触发一次 click。
+    if (
+      !event.defaultPrevented
+      && !event.repeat
+      && !event.metaKey
+      && !event.ctrlKey
+      && !event.altKey
+      && (event.key === "Enter" || event.key === " " || event.key === "Spacebar")
+    ) {
+      const target = event.target;
+      if (target instanceof HTMLButtonElement && !target.disabled) {
+        event.preventDefault();
+        target.click();
+        return;
+      }
     }
 
     const zTarget = event.target;
@@ -505,15 +533,12 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
   window.addEventListener("scroll", onScrollOrResize, true);
   window.addEventListener("resize", onScrollOrResize);
 
-  function versionLabel(version: string): string {
-    return version.startsWith("v") ? version : `v${version}`;
-  }
-
   function renderView(previous: PanelView | null, next: PanelView): void {
     if (previous !== null && previous.sessionID !== next.sessionID) resetSessionState();
     renderStatus(next.status);
     renderContent(next);
     if (next.body.kind === "summary") renderBreakdown(previous, next);
+    applyItemSelection(next);
     syncCopyTimer(next);
     applyFocusTransition(previous, next);
     syncRetryControls();
@@ -522,7 +547,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
   function resetSessionState(): void {
     currentFreeTokens = 0;
     mapSignature = null;
-    breakdownSignature = null;
+    breakdownSignatureCache = null;
     cellElements.clear();
     hoveredCell = null;
     pinnedCell = null;
@@ -534,40 +559,9 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
 
   function renderStatus(state: PanelState): void {
     statusInline.dataset.state = state.kind;
-    let title: string;
-    let detail: string;
-    let version: string;
-    if (state.kind === "checking") {
-      title = t(currentLocale, "statusCheckingTitle");
-      detail = t(currentLocale, "statusCheckingDetail");
-      version = "…";
-    } else if (state.kind === "connected") {
-      title = t(currentLocale, "statusConnectedTitle", {
-        version: versionLabel(state.version),
-      });
-      detail = state.outdated
-        ? t(currentLocale, "statusOutdatedDetail", {
-          expected: versionLabel(state.expectedVersion ?? COLLECTOR_VERSION),
-        })
-        : t(currentLocale, "statusConnectedDetail");
-      version = versionLabel(state.version);
-    } else if (state.kind === "disconnected") {
-      if (state.reason === "unreachable") {
-        title = t(currentLocale, "collectorUnreachableTitle");
-        detail = t(currentLocale, "collectorUnreachableDetail");
-      } else {
-        title = t(currentLocale, "collectorNotRunning");
-        detail = t(currentLocale, "collectorNotRunningDetail", {
-          path: COLLECTOR_INSTALL_PATH,
-        });
-      }
-      version = "—";
-    } else {
-      title = t(currentLocale, state.titleKey);
-      detail = t(currentLocale, state.detailKey);
-      version = "—";
-    }
-    statusVersion.textContent = version;
+    statusVersion.textContent = state.versionText;
+    const title = t(currentLocale, state.titleKey, state.titleArgs);
+    const detail = t(currentLocale, state.detailKey, state.detailArgs);
     const full = `${title} · ${detail}`;
     statusInline.title = full;
     statusInline.setAttribute("aria-label", full);
@@ -597,25 +591,22 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     renderRefreshBanner();
     renderStatus(view.status);
     mapSignature = null;
-    breakdownSignature = null;
+    breakdownSignatureCache = null;
   }
 
   function renderVersionBanner(): void {
     const status = view.status;
-    const outdated = status.kind === "connected" && status.outdated === true
-      ? {
-        version: status.version,
-        expectedVersion: status.expectedVersion ?? COLLECTOR_VERSION,
-      }
-      : null;
-    versionSlot.hidden = outdated === null;
-    if (outdated === null) return;
+    if (status.kind !== "connected" || status.outdated !== true) {
+      versionSlot.hidden = true;
+      return;
+    }
+    versionSlot.hidden = false;
     versionBanner.update({
       tone: "warning",
       title: t(currentLocale, "versionOutdatedTitle"),
       body: t(currentLocale, "versionOutdatedBody", {
-        version: versionLabel(outdated.version),
-        expected: versionLabel(outdated.expectedVersion),
+        version: status.versionText,
+        expected: status.expectedText,
       }),
     });
   }
@@ -630,7 +621,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     mapCard.hidden = true;
     breakdownCard.hidden = true;
     mapSignature = null;
-    breakdownSignature = null;
+    breakdownSignatureCache = null;
     hoveredCell = null;
     pinnedCell = null;
     itemButtons = [];
@@ -653,33 +644,16 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       return;
     }
     showPlaceholder(
-      body.args === undefined
-        ? t(currentLocale, body.titleKey)
-        : t(currentLocale, body.titleKey, body.args),
-      body.args === undefined
-        ? t(currentLocale, body.detailKey)
-        : t(currentLocale, body.detailKey, body.args),
+      t(currentLocale, body.titleKey, body.titleArgs),
+      t(currentLocale, body.detailKey, body.detailArgs),
       body.retry,
     );
-  }
-
-  function formatNumber(value: number): string {
-    return new Intl.NumberFormat(currentLocale === "zh" ? "zh-CN" : "en-US").format(value);
   }
 
   function itemCountLabel(count: number): string {
     return count === 1
       ? t(currentLocale, "itemCountOne")
-      : t(currentLocale, "itemCountMany", { items: formatNumber(count) });
-  }
-
-  function formatPercent(value: number): string {
-    const rounded = Math.round(value * 10) / 10;
-    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
-  }
-
-  function pad2(value: number): string {
-    return String(value).padStart(2, "0");
+      : t(currentLocale, "itemCountMany", { items: formatNumber(count, currentLocale) });
   }
 
   /** 「更新于」只显示快照的采集时间，不用本地当前时间冒充。 */
@@ -719,28 +693,8 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       ? `${label}${t(currentLocale, "restoredSuffix")}`
       : label;
     updated.title = t(currentLocale, "collectedAtTitle", {
-      date: date.toLocaleString(currentLocale === "zh" ? "zh-CN" : "en-US", { hour12: false }),
+      date: date.toLocaleString(intlLocale(currentLocale), { hour12: false }),
     });
-  }
-
-  function snapshotSignature(next: SnapshotSummary, zoom: PanelView["zoom"]): string {
-    return [
-      next.sessionID,
-      next.collectedAt,
-      next.used,
-      next.window,
-      zoom,
-      next.categories.map((usage) => `${usage.category}:${usage.items}:${usage.tokens}`).join(","),
-      next.items.length,
-    ].join("|");
-  }
-
-  function compactNumber(value: number): string {
-    const safe = Math.max(0, Math.round(value));
-    if (safe < 1000) return String(safe);
-    const scaled = safe / 1000;
-    const digits = scaled >= 10 ? 0 : 1;
-    return `${scaled.toFixed(digits).replace(/\.0$/, "")}k`;
   }
 
   function renderZoomLabel(layout: MapLayout): void {
@@ -755,10 +709,6 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
 
   function toggleZoom(): void {
     model.setZoom(view.zoom === "window" ? "fit" : "window");
-  }
-
-  function roundPercent(value: number): string {
-    return String(Math.round(value * 1000) / 1000);
   }
 
   function cellBackground(cell: MapCell): string {
@@ -778,7 +728,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       .map(
         (segment) =>
           `${categoryLabel(segment.category)} ${t(currentLocale, "tokenCount", {
-            tokens: formatNumber(Math.round(segment.tokens)),
+            tokens: formatNumber(Math.round(segment.tokens), currentLocale),
           })}`,
       )
       .join(t(currentLocale, "listSeparator"));
@@ -811,7 +761,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       button.setAttribute(
         "aria-label",
         cell.free
-          ? t(currentLocale, "freeCellLabel", { tokens: formatNumber(currentFreeTokens) })
+          ? t(currentLocale, "freeCellLabel", { tokens: formatNumber(currentFreeTokens, currentLocale) })
           : cellLabel(cell),
       );
       button.dataset.index = String(cell.index);
@@ -861,12 +811,12 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       const tokens = document.createElement("span");
       tokens.className = "tip-tokens";
       tokens.textContent = t(currentLocale, "tokenCount", {
-        tokens: formatNumber(currentFreeTokens),
+        tokens: formatNumber(currentFreeTokens, currentLocale),
       });
       row.append(dot, name, tokens);
       fragment.append(row);
       mapHint.textContent = t(currentLocale, "freeCellLabel", {
-        tokens: formatNumber(currentFreeTokens),
+        tokens: formatNumber(currentFreeTokens, currentLocale),
       });
     } else {
       for (const segment of cell.segments) {
@@ -880,7 +830,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
         const tokens = document.createElement("span");
         tokens.className = "tip-tokens";
         tokens.textContent = t(currentLocale, "tokenCount", {
-          tokens: formatNumber(Math.round(segment.tokens)),
+          tokens: formatNumber(Math.round(segment.tokens), currentLocale),
         });
         row.append(dot, name, tokens);
         fragment.append(row);
@@ -889,7 +839,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
         .map(
           (segment) =>
             `${categoryLabel(segment.category)} ${t(currentLocale, "tokenCount", {
-              tokens: formatNumber(Math.round(segment.tokens)),
+              tokens: formatNumber(Math.round(segment.tokens), currentLocale),
             })}`,
         )
         .join(t(currentLocale, "listSeparator"));
@@ -1005,6 +955,17 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     }
   }
 
+  /** 条目列表里只有模型选中的那一条带可见标记；方向键移动焦点时同步更新。 */
+  function applyItemSelection(current: PanelView): void {
+    const selected = current.focus.itemId;
+    for (const button of itemButtons) {
+      const active = selected !== null && button.dataset.itemId === selected;
+      button.classList.toggle("is-selected", active);
+      if (active) button.setAttribute("aria-current", "true");
+      else button.removeAttribute("aria-current");
+    }
+  }
+
   function applyFocusTransition(previous: PanelView | null, next: PanelView): void {
     if (previous === null || next.body.kind !== "summary") return;
     if (previous.preview !== null && next.preview === null) {
@@ -1022,45 +983,14 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     }
   }
 
-  function breakdownSignatureFor(current: PanelView): string {
-    const preview = current.preview;
-    if (preview !== null) {
-      return [
-        "preview",
-        preview.itemId,
-        preview.category,
-        preview.title,
-        preview.chars,
-        preview.text,
-        preview.loading,
-        preview.error ?? "",
-        preview.truncated,
-        current.notice ?? "",
-      ].join("|");
-    }
-    const summary = current.summary;
-    return [
-      "list",
-      summary?.sessionID ?? "",
-      summary?.collectedAt ?? "",
-      summary?.used ?? 0,
-      summary?.window ?? 0,
-      summary?.categories.map((usage) => `${usage.category}:${usage.items}:${usage.tokens}`).join(",") ?? "",
-      summary?.items.map((item) => `${item.id}:${item.title}:${item.chars}`).join(",") ?? "",
-      current.selectedCategory ?? "",
-      current.layer,
-      current.notice ?? "",
-    ].join("|");
-  }
-
   function renderBreakdown(previous: PanelView | null, next: PanelView): void {
     if (next.body.kind !== "summary" || next.summary === null) {
       backButton.hidden = true;
       return;
     }
-    const signature = breakdownSignatureFor(next);
-    if (signature === breakdownSignature) return;
-    breakdownSignature = signature;
+    const signature = breakdownSignature(next);
+    if (signature === breakdownSignatureCache) return;
+    breakdownSignatureCache = signature;
 
     const active = document.activeElement;
     const activeElement = active instanceof HTMLElement && breakdownBody.contains(active) ? active : null;
@@ -1120,7 +1050,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       drillMeta.textContent = row
         ? t(currentLocale, "drillMeta", {
           items: itemCountLabel(row.items),
-          tokens: formatNumber(row.tokens),
+          tokens: formatNumber(row.tokens, currentLocale),
         })
         : itemCountLabel(items.length);
       drill.append(drillTitle, drillMeta);
@@ -1146,7 +1076,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
         const itemMeta = document.createElement("div");
         itemMeta.className = "item-meta";
         itemMeta.textContent = t(currentLocale, "itemChars", {
-          chars: formatNumber(item.chars),
+          chars: formatNumber(item.chars, currentLocale),
         });
         itemRow.append(itemTitle, itemMeta);
         itemRow.addEventListener("click", () => { void model.openItem(item.id); });
@@ -1181,7 +1111,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       meta.className = "row-meta";
       meta.textContent = t(currentLocale, "drillMeta", {
         items: itemCountLabel(entry.items),
-        tokens: formatNumber(entry.tokens),
+        tokens: formatNumber(entry.tokens, currentLocale),
       });
       row.append(swatch, name, meta);
       row.addEventListener("click", () => {
@@ -1201,7 +1131,9 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     const freeMeta = document.createElement("span");
     freeMeta.className = "row-meta";
     const bar = windowBar(current.used, current.window);
-    const freeTokens = t(currentLocale, "tokenCount", { tokens: formatNumber(bar.free) });
+    const freeTokens = t(currentLocale, "tokenCount", {
+      tokens: formatNumber(bar.free, currentLocale),
+    });
     freeMeta.textContent = bar.over
       ? `${freeTokens} · ${t(currentLocale, "overWindow")}`
       : freeTokens;
@@ -1217,10 +1149,14 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
   function renderPreview(state: PreviewState, notice: PanelView["notice"]): void {
     previewTitle.textContent = state.title || t(currentLocale, "unnamedItem");
     const suffix = state.truncated
-      ? t(currentLocale, "previewTruncated", { chars: formatNumber(PREVIEW_MAX_CHARS) })
+      ? t(currentLocale, "previewTruncated", {
+        chars: formatNumber(PREVIEW_MAX_CHARS, currentLocale),
+      })
       : "";
     previewMeta.textContent =
-      `${categoryLabel(state.category)} · ${t(currentLocale, "itemChars", { chars: formatNumber(state.chars) })}${suffix}`;
+      `${categoryLabel(state.category)} · ${t(currentLocale, "itemChars", {
+        chars: formatNumber(state.chars, currentLocale),
+      })}${suffix}`;
     previewBody.textContent = state.text;
     previewBody.hidden = state.loading || state.error !== null;
     previewCopy.disabled = state.loading || state.error !== null;
@@ -1305,8 +1241,8 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
 
     usageModel.textContent = next.model;
     usageModel.title = next.model;
-    usageUsed.textContent = formatNumber(next.used);
-    usageWindow.textContent = formatNumber(next.window);
+    usageUsed.textContent = formatNumber(next.used, currentLocale);
+    usageWindow.textContent = formatNumber(next.window, currentLocale);
     const percent = next.window > 0 ? (next.used / next.window) * 100 : 0;
     usagePct.textContent = `${formatPercent(percent)}%`;
 
