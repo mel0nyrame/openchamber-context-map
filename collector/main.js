@@ -683,6 +683,62 @@ class SnapshotWriter {
   }
 }
 
+// src/collector/resolver.ts
+function itemDetail(item) {
+  return { id: item.id, title: item.title, chars: item.chars, text: item.text };
+}
+
+class SnapshotResolver {
+  #store;
+  #baselines;
+  #loadSession;
+  #resolveWindow;
+  constructor(deps) {
+    this.#store = deps.store;
+    this.#baselines = deps.baselines;
+    this.#loadSession = deps.loadSession;
+    this.#resolveWindow = deps.resolveWindow;
+  }
+  async resolveSummary(sessionID) {
+    if (!sessionID)
+      return null;
+    const record = this.#store.get(sessionID);
+    if (record)
+      return record.summary;
+    const template = await this.#baselineTemplate(sessionID);
+    if (!template)
+      return null;
+    const resolved = await this.#resolveWindow(template.modelRef).catch(() => ({
+      window: DEFAULT_WINDOW,
+      assumed: true
+    }));
+    return baselineSummary(template, sessionID, resolved.window, resolved.assumed);
+  }
+  async resolveItem(sessionID, itemID) {
+    if (!sessionID || !itemID)
+      return null;
+    const record = this.#store.get(sessionID);
+    if (record) {
+      if (!record.draft)
+        return null;
+      const item = record.draft.items.find((candidate) => candidate.id === itemID);
+      return item ? itemDetail(item) : null;
+    }
+    const template = await this.#baselineTemplate(sessionID);
+    const item = template?.items.find((candidate) => candidate.id === itemID);
+    return item ? itemDetail(item) : null;
+  }
+  async#baselineTemplate(sessionID) {
+    const info = await this.#loadSession(sessionID).catch(() => null);
+    const agent = typeof info?.agent === "string" ? info.agent : "";
+    const ref = info?.model;
+    if (!agent || !ref || typeof ref.providerID !== "string" || !modelRefID(ref)) {
+      return null;
+    }
+    return this.#baselines.get(agent, ref) ?? null;
+  }
+}
+
 // src/collector/store.ts
 var MAX_SESSIONS = 20;
 
@@ -778,6 +834,22 @@ var collector = {
     const store = new SnapshotStore;
     const baselines = new BaselineStore;
     const windows = new WindowResolver(context);
+    const resolver = new SnapshotResolver({
+      store,
+      baselines,
+      loadSession: async (sessionID) => {
+        const get = context.session?.get;
+        if (!get)
+          return null;
+        try {
+          const info = await get.call(context.session, { sessionID });
+          return info ?? null;
+        } catch {
+          return null;
+        }
+      },
+      resolveWindow: (ref) => windows.resolve(ref)
+    });
     const persistDir = persistenceEnabled() ? resolveSnapshotDir() : null;
     const writer = new SnapshotWriter(persistDir);
     if (persistDir) {
@@ -796,23 +868,6 @@ var collector = {
           writer.schedule(summary);
       }).catch(() => {});
     }) : null;
-    const resolveBaselineTemplate = async (sessionID) => {
-      const get = context.session?.get;
-      if (!get)
-        return null;
-      let info;
-      try {
-        info = await get.call(context.session, { sessionID });
-      } catch {
-        return null;
-      }
-      const agent = typeof info?.agent === "string" ? info.agent : "";
-      const ref = info?.model;
-      if (!agent || !ref || typeof ref.providerID !== "string" || !modelRefID(ref)) {
-        return null;
-      }
-      return baselines.get(agent, ref) ?? null;
-    };
     const server = createServer(async (request, response) => {
       try {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -836,33 +891,20 @@ var collector = {
             sendJson(response, 400, { error: "bad_request" });
             return;
           }
-          const record = store.get(sessionID);
           if (path === "/summary") {
-            if (record) {
-              sendJson(response, 200, record.summary);
-              return;
-            }
-            const template = await resolveBaselineTemplate(sessionID);
-            if (!template) {
+            const summary = await resolver.resolveSummary(sessionID);
+            if (!summary) {
               sendJson(response, 404, { error: "not_found" });
               return;
             }
-            const resolved = await windows.resolve(template.modelRef).catch(() => ({ window: DEFAULT_WINDOW, assumed: true }));
-            sendJson(response, 200, baselineSummary(template, sessionID, resolved.window, resolved.assumed));
+            sendJson(response, 200, summary);
             return;
           }
-          const items = record ? record.draft?.items : (await resolveBaselineTemplate(sessionID))?.items;
-          const item = items?.find((candidate) => candidate.id === itemId);
-          if (!item) {
+          const detail = await resolver.resolveItem(sessionID, itemId ?? "");
+          if (!detail) {
             sendJson(response, 404, { error: "not_found" });
             return;
           }
-          const detail = {
-            id: item.id,
-            title: item.title,
-            chars: item.chars,
-            text: item.text
-          };
           sendJson(response, 200, detail);
           return;
         }
