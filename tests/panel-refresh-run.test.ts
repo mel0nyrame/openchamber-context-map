@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { createPanelModel } from "../src/panel/model.ts";
 import { createRefreshController, type RefreshView } from "../src/panel/refresh.ts";
-import { createRefreshRun } from "../src/panel/refresh-run.ts";
+import { createRefreshRun, installCollector } from "../src/panel/refresh-run.ts";
 
 /** 跑完控制器和刷新流程里排队的微任务；不用真实计时器。 */
 async function flush(): Promise<void> {
@@ -73,5 +73,30 @@ describe("刷新流程", () => {
     });
     expect(model.getView().body.kind).toBe("placeholder");
     expect(views.at(-1)?.state.failures).toBe(0);
+  });
+});
+
+describe("安装 Collector", () => {
+  test("把 Service 的结果映射成安装状态", async () => {
+    const cases = [
+      { status: 200, expected: "installed" },
+      { status: 409, expected: "conflict" },
+      { status: 500, expected: "failed" },
+    ] as const;
+    for (const item of cases) {
+      const seen: Array<{ method: string; path: string }> = [];
+      const result = await installCollector(async (request) => {
+        seen.push({ method: request.method, path: request.path });
+        return { status: item.status, body: "" };
+      });
+      expect(result).toBe(item.expected);
+      expect(seen).toEqual([{ method: "POST", path: "/collector/install" }]);
+    }
+  });
+
+  test("请求抛错时返回 failed", async () => {
+    expect(await installCollector(async () => {
+      throw new Error("offline");
+    })).toBe("failed");
   });
 });

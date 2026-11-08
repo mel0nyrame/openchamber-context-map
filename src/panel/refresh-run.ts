@@ -14,9 +14,10 @@ export interface ServiceResponse {
 
 export interface ServiceRequest {
   (request: {
-    method: "GET";
+    method: "GET" | "POST";
     path: string;
     query?: Record<string, string>;
+    body?: string;
   }): Promise<ServiceResponse>;
 }
 
@@ -173,4 +174,23 @@ export function createRefreshRun(
     context.markLoaded();
     return true;
   };
+}
+
+export type CollectorInstallResult = "installed" | "conflict" | "failed";
+
+/**
+ * 让 Service 把自带的 Collector 写到 OpenCode 插件目录。
+ * 只把 HTTP 结果映射成面板状态；文件内容与冲突判断都在 Service 侧完成。
+ */
+export async function installCollector(
+  request: ServiceRequest,
+): Promise<CollectorInstallResult> {
+  try {
+    const result = await request({ method: "POST", path: "/collector/install" });
+    if (result.status === 200) return "installed";
+    if (result.status === 409) return "conflict";
+    return "failed";
+  } catch {
+    return "failed";
+  }
 }

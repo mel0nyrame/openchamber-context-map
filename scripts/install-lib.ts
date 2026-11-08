@@ -1,5 +1,25 @@
 import { join } from "node:path";
 
+import {
+  COLLECTOR_MARKER,
+  classifyCollectorContent,
+  collectorFileContent,
+  collectorHeader,
+  collectorInstallPath,
+  readCollectorVersion,
+  type CollectorFileState,
+} from "../src/shared/collector-file.ts";
+
+export {
+  COLLECTOR_MARKER,
+  classifyCollectorContent,
+  collectorFileContent,
+  collectorHeader,
+  collectorInstallPath,
+  readCollectorVersion,
+  type CollectorFileState,
+};
+
 /** OpenChamber 用 panel id 作为扩展的 guest id。 */
 export const EXTENSION_GUEST_ID = "context-map";
 
@@ -19,9 +39,6 @@ export function isBunInstallCommand(command: string | null | undefined): boolean
   const runAt = tokens.indexOf("run");
   return installAt !== -1 && (runAt === -1 || runAt > installAt);
 }
-
-/** Collector 复制文件的第一行标记，用来区分本工具生成的文件与用户自己的插件。 */
-export const COLLECTOR_MARKER = "@context-map-collector";
 
 export interface InstallPaths {
   /** OpenChamber 数据目录，默认 `~/.config/openchamber`。 */
@@ -56,7 +73,7 @@ export function resolveInstallPaths(
     extensionsFile: join(dataDir, "extensions.json"),
     opencodeConfigDir,
     pluginsDir,
-    collectorPath: join(pluginsDir, "context-map.js"),
+    collectorPath: collectorInstallPath(home, env),
   };
 }
 
@@ -76,31 +93,6 @@ export function extensionLinkState(probe: ExtensionLinkProbe): ExtensionLinkStat
   if (!probe.exists) return "missing";
   if (!probe.isSymlink) return "conflict";
   return probe.resolvedTarget === probe.repoRoot ? "ours" : "conflict";
-}
-
-export function collectorHeader(version: string): string {
-  return [
-    `// ${COLLECTOR_MARKER} v${version}`,
-    "// 本文件由 `bun run install` 从 openchamber-context-map 复制；升级请重新运行安装命令。",
-  ].join("\n");
-}
-
-/** 在 Collector 构建产物前加标记，卸载和升级时据此判断文件归属。 */
-export function collectorFileContent(source: string, version: string): string {
-  return `${collectorHeader(version)}\n${source}`;
-}
-
-/** 读取已安装 Collector 的版本；标记必须在文件开头，避免把正文提到该字符串的用户插件当成自己的。 */
-export function readCollectorVersion(content: string): string | null {
-  const match = /^\/\/ @context-map-collector v(\S+)[^\n]*/.exec(content);
-  return match?.[1] ?? null;
-}
-
-export type CollectorFileState = "missing" | "ours" | "conflict";
-
-export function classifyCollectorContent(content: string | null): CollectorFileState {
-  if (content === null) return "missing";
-  return readCollectorVersion(content) === null ? "conflict" : "ours";
 }
 
 export type ExtensionStore = { paths: string[] } & Record<string, unknown>;

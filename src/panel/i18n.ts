@@ -79,6 +79,16 @@ const en = {
   collectorNotRunning: "Collector is not running",
   collectorNotRunningDetail:
     "No discovery file was found. Install the Collector to {path} and restart OpenCode.",
+  installCollector: "Install Collector",
+  installingCollector: "Installing…",
+  collectorInstalledTitle: "Collector installed",
+  collectorInstalledDetail:
+    "Fully quit OpenCode and reopen it. The panel connects automatically after the Collector loads.",
+  collectorConflictTitle: "Collector file already exists",
+  collectorConflictDetail:
+    "A file in {path} was not created by this tool. Remove or rename it, then try again.",
+  collectorInstallFailedTitle: "Could not install the Collector",
+  collectorInstallFailedDetail: "Check that {path} is writable, then try again.",
   noSessionTitle: "No open session",
   noSessionDetail: "Open a session to see its context usage.",
   summaryTimeoutTitle: "Collector did not respond in time",
@@ -186,6 +196,14 @@ const zh: Record<MessageKey, string> = {
   collectorNotRunning: "Collector 未运行",
   collectorNotRunningDetail:
     "没有找到 Discovery file。把 Collector 安装到 {path} 后重启 OpenCode。",
+  installCollector: "安装 Collector",
+  installingCollector: "正在安装…",
+  collectorInstalledTitle: "Collector 已安装",
+  collectorInstalledDetail: "完全退出 OpenCode 后重新打开。Collector 加载后，面板会自动连接。",
+  collectorConflictTitle: "Collector 文件已存在",
+  collectorConflictDetail: "{path} 中有一个不是本工具创建的文件。请移走或重命名后重试。",
+  collectorInstallFailedTitle: "无法安装 Collector",
+  collectorInstallFailedDetail: "请确认 {path} 可写，然后重试。",
   noSessionTitle: "没有打开的 session",
   noSessionDetail: "打开一个 session 后，这里会显示它的上下文占用。",
   summaryTimeoutTitle: "Collector 没有及时响应",
