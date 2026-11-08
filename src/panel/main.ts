@@ -14,7 +14,7 @@ import {
   createRefreshController,
   type RefreshController,
 } from "./refresh.ts";
-import { createRefreshRun } from "./refresh-run.ts";
+import { createRefreshRun, installCollector } from "./refresh-run.ts";
 import { applySessionSnapshot } from "./session.ts";
 import { createPanelView } from "./view.ts";
 
@@ -38,10 +38,27 @@ refreshController = createRefreshController({
   run: runRefresh,
   onChange: (next) => model.setRefresh(next),
 });
+
+async function installCollectorFromPanel(): Promise<void> {
+  if (model.getView().install.kind === "installing") return;
+  model.setInstall({ kind: "installing" });
+  const result = await installCollector((request) => host.serviceRequest(request));
+  model.setInstall(
+    result === "installed"
+      ? { kind: "installed" }
+      : result === "conflict"
+        ? { kind: "conflict" }
+        : { kind: "failed" },
+  );
+}
+
 const panelView = createPanelView({
   root,
   model,
   onManualRefresh: () => refreshController.refresh("manual"),
+  onInstallCollector: () => {
+    void installCollectorFromPanel();
+  },
 });
 
 function parseItemDetail(body: string): SnapshotItemDetail | null {

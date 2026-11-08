@@ -13,9 +13,19 @@ The panel keeps only the last request per session. Snapshots live in memory, and
 - [Bun](https://bun.sh/) 1.3 or newer.
 - OpenChamber 2.5.2 (verified version).
 - OpenCode 2.2.2 (verified version) with the V2 plugin API.
-- A stable repository path. The extension is installed as a symlink, so do not move or delete the checkout afterwards.
+- For the checkout install, a stable repository path. The extension is installed as a symlink, so do not move or delete the checkout afterwards.
 
 ## Install
+
+### From OpenChamber
+
+In OpenChamber, open **Settings → Extensions** and install the extension from this repository's Git URL. Approve the `service` capability. Then open the **Context Map** panel.
+
+If the panel says `Collector is not running`, click **Install Collector**. The Service copies the bundled `collector/main.js` to `~/.config/opencode/plugins/context-map.js` with the `@context-map-collector` marker. It writes only when the file is missing or was created by this tool; it never overwrites your own plugin.
+
+Then **fully quit** OpenCode and OpenChamber, and reopen them. OpenCode loads the Collector only at process start. The panel install uses the default OpenCode config directory; if you set `XDG_CONFIG_HOME`, use the checkout install below.
+
+### From a checkout
 
 ```bash
 git clone <repository-url> openchamber-context-map
@@ -39,7 +49,7 @@ Default paths:
 
 | Item | Path |
 | --- | --- |
-| Extension symlink | `~/.config/openchamber/extensions/context-map` → repository root |
+| Extension directory | `~/.config/openchamber/extensions/context-map` → repository root (symlink for a checkout install) |
 | Collector | `~/.config/opencode/plugins/context-map.js` |
 | Extension registry | `~/.config/openchamber/extensions.json` |
 
@@ -50,7 +60,7 @@ OPENCHAMBER_DATA_DIR=/path/to/openchamber bun run install
 XDG_CONFIG_HOME=/path/to/config bun run install
 ```
 
-The installer is idempotent: running it again does not create a second symlink, a second Collector file, or duplicate registry entries. It only accepts an empty target, a symlink pointing at this repository, or a Collector file carrying the `@context-map-collector` marker. If a target already exists and was not created by this tool, the installer stops and leaves the file untouched.
+The installer is idempotent: running it again does not create a second symlink, a second Collector file, or duplicate registry entries. It only accepts an empty target, a symlink pointing at this repository, or a Collector file carrying the `@context-map-collector` marker. The panel's **Install Collector** button follows the same marker rule. If a target already exists and was not created by this tool, the installer stops and leaves the file untouched.
 
 Quit OpenChamber before installing or uninstalling. A running host may rewrite `extensions.json` at the same time, and the change requires a restart anyway.
 
@@ -70,7 +80,7 @@ The panel follows OpenChamber's language. English is the source language; Chines
 
 ## Upgrade
 
-The extension directory is a symlink, so OpenChamber picks up repository changes on reload. The Collector is a copy in the OpenCode plugin directory and only updates when the installer runs again. Upgrade both together:
+The extension directory is a symlink for a checkout install, so OpenChamber picks up repository changes on reload. A link install updates through **Settings → Extensions**. The Collector is a copy in the OpenCode plugin directory. A missing Collector can be installed from the panel; an existing Collector only updates when the installer runs again. For a checkout, upgrade both together:
 
 ```bash
 cd openchamber-context-map
@@ -82,11 +92,13 @@ Then fully quit and reopen OpenCode and OpenChamber. Installer output such as `U
 
 ### The panel says the Collector is outdated
 
-The running Collector version does not match the version the extension expects. The panel only warns; it never updates the Collector automatically (see `docs/adr/0008-degradation-layers.md`).
+The running Collector version does not match the version the extension expects. The panel only warns; it never updates an existing Collector automatically (see `docs/adr/0008-degradation-layers.md`).
 
 1. Run `bun run install` in the repository and confirm that the Collector was updated to the expected version.
 2. Fully quit **every** OpenCode instance, then reopen. Closing one window or restarting one instance can leave an old process registered.
 3. The status should return to `Collector connected · vX.Y.Z`, and the warning should disappear.
+
+If you installed the extension from a link, there is no checkout to run the installer from. Quit OpenCode, confirm that the plugin file starts with the marker, delete it, reopen the panel, and click **Install Collector**; the Service writes the current bundled copy. Then reopen OpenCode.
 
 If the warning persists, check:
 
@@ -102,6 +114,8 @@ The first line should be `// @context-map-collector v<version>`. If the file is 
 cd openchamber-context-map
 bun run uninstall
 ```
+
+If you installed from a link, uninstall through **Settings → Extensions**, then delete `~/.config/opencode/plugins/context-map.js` if its first line carries the marker.
 
 Uninstall removes only:
 
@@ -131,7 +145,7 @@ The panel shows `Collector is not running` and mentions a missing discovery file
 
    You should see `collector-<pid>.json`. If `CONTEXT_MAP_DISCOVERY_DIR` is set, look there instead.
 
-3. If the file is missing, run `bun run install` again, then fully quit and reopen OpenCode. An old OpenCode version, a plugin load error, or closing only the window can all prevent the Collector from loading.
+3. If the file is missing and the panel shows **Install Collector**, click it. Otherwise run `bun run install` from a checkout. Then fully quit and reopen OpenCode. An old OpenCode version, a plugin load error, or closing only the window can all prevent the Collector from loading.
 
 `opencode plugin list` only lists plugins installed as packages, not local files in `~/.config/opencode/plugins/`; `No plugins found` there does not mean the Collector is missing.
 
@@ -179,7 +193,7 @@ ls -ld ~/.config/openchamber/extensions/context-map
 ls -l ~/.config/opencode/plugins/context-map.js
 ```
 
-If it is an old file of yours, back it up and move it away, then run `bun run install` again. Do not delete a directory whose origin you are unsure of.
+If it is an old file of yours, back it up and move it away, then run `bun run install` again. Do not delete a directory whose origin you are unsure of. The panel's **Install Collector** button follows the same rule: it returns a conflict and leaves the file untouched.
 
 ## Development
 

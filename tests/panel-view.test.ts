@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import type { HostFailureCopy } from "../src/panel/failure.ts";
 import { resolveLocale, type MessageKey } from "../src/panel/i18n.ts";
 import type {
+  CollectorInstallState,
   PanelModel,
   PanelState,
   PanelView,
@@ -255,6 +256,8 @@ class FakePanelModel implements PanelModel {
   setNotice(notice: MessageKey | null): void {
     this.commands.push({ type: "setNotice", notice });
   }
+
+  setInstall(_state: CollectorInstallState): void {}
 }
 
 interface Mounted {
@@ -262,6 +265,7 @@ interface Mounted {
   readonly model: FakePanelModel;
   readonly handle: PanelViewHandle;
   readonly manualRefreshes: () => number;
+  readonly installs: () => number;
 }
 
 let mounted: Mounted | null = null;
@@ -271,11 +275,15 @@ function mount(view: PanelView): Mounted {
   document.body.append(root);
   const model = new FakePanelModel(view);
   let manualRefreshes = 0;
+  let installs = 0;
   const handle = createPanelView({
     root,
     model,
     onManualRefresh: () => {
       manualRefreshes += 1;
+    },
+    onInstallCollector: () => {
+      installs += 1;
     },
   });
   mounted = {
@@ -283,6 +291,7 @@ function mount(view: PanelView): Mounted {
     model,
     handle,
     manualRefreshes: () => manualRefreshes,
+    installs: () => installs,
   };
   return mounted;
 }
@@ -621,6 +630,7 @@ describe("占位区", () => {
         titleKey: "noSessionTitle",
         detailKey: "noSessionDetail",
         retry: true,
+        install: false,
       },
     }));
     expect(query(root, ".placeholder-title").textContent).toBe("No open session");
@@ -635,8 +645,8 @@ describe("占位区", () => {
     expect(manualRefreshes()).toBe(1);
   });
 
-  test("未安装 Collector 时在详情里给出安装路径", () => {
-    const { root } = mount(panelView({
+  test("未安装 Collector 时在详情里给出安装路径和安装按钮", () => {
+    const { root, installs } = mount(panelView({
       status: {
         kind: "disconnected",
         versionText: "—",
@@ -651,6 +661,7 @@ describe("占位区", () => {
         detailKey: "collectorNotRunningDetail",
         detailArgs: { path: "~/.config/opencode/plugins/" },
         retry: true,
+        install: true,
       },
     }));
     expect(query(root, ".placeholder-title").textContent)
@@ -660,6 +671,10 @@ describe("占位区", () => {
         "No discovery file was found. Install the Collector to ~/.config/opencode/plugins/ and restart OpenCode.",
       );
     expect(query(root, ".placeholder-actions").hidden).toBe(false);
+    const install = query(root, '[data-action="install"] button');
+    expect(install.textContent).toBe("Install Collector");
+    install.click();
+    expect(installs()).toBe(1);
   });
 
   test("Host 失败时显示标题、详情和重试", () => {
@@ -675,6 +690,7 @@ describe("占位区", () => {
         titleKey: "hostNoServiceTitle",
         detailKey: "hostNoServiceDetail",
         retry: true,
+        install: false,
       },
     }));
     expect(query(root, ".placeholder-title").textContent)

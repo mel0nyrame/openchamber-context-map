@@ -1,10 +1,43 @@
 // src/service/main.ts
+import { randomBytes } from "node:crypto";
+import { lstat, mkdir as mkdir2, readFile as readFile2, rename as rename2, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
 import { createServer } from "node:http";
+import { homedir as homedir2 } from "node:os";
+import { dirname, isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// src/shared/collector-file.ts
+import { join } from "node:path";
+var COLLECTOR_MARKER = "@context-map-collector";
+function collectorHeader(version) {
+  return [
+    `// ${COLLECTOR_MARKER} v${version}`,
+    "// 本文件由 openchamber-context-map 安装；升级请重新运行安装命令。"
+  ].join(`
+`);
+}
+function collectorFileContent(source, version) {
+  return `${collectorHeader(version)}
+${source}`;
+}
+function readCollectorVersion(content) {
+  const match = /^\/\/ @context-map-collector v(\S+)[^\n]*/.exec(content);
+  return match?.[1] ?? null;
+}
+function classifyCollectorContent(content) {
+  if (content === null)
+    return "missing";
+  return readCollectorVersion(content) === null ? "conflict" : "ours";
+}
+function collectorInstallPath(home, env) {
+  const configHome = env.XDG_CONFIG_HOME?.trim() || join(home, ".config");
+  return join(configHome, "opencode", "plugins", "context-map.js");
+}
 
 // src/shared/discovery.ts
 import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 
 // src/shared/version.ts
 var COLLECTOR_VERSION = "0.2.0";
@@ -23,7 +56,7 @@ function resolveDiscoveryDir(env = process.env) {
   const override = env[DISCOVERY_DIR_ENV]?.trim();
   if (override)
     return override;
-  return join(homedir(), ".local", "state", "openchamber-context-map", "collectors");
+  return join2(homedir(), ".local", "state", "openchamber-context-map", "collectors");
 }
 async function removeDiscovery(file) {
   await rm(file, { force: true });
@@ -45,7 +78,7 @@ async function readDiscoveryEntries(dir) {
   for (const name of names) {
     if (!name.endsWith(".json"))
       continue;
-    const file = join(dir, name);
+    const file = join2(dir, name);
     try {
       const value = JSON.parse(await readFile(file, "utf8"));
       if (isDiscoveryRecord(value))
@@ -78,6 +111,71 @@ function sendJson(response, status, body) {
     "Cache-Control": "no-store"
   });
   response.end(JSON.stringify(body));
+}
+function collectorSourceCandidates() {
+  return [
+    fileURLToPath(new URL("../collector/main.js", import.meta.url)),
+    fileURLToPath(new URL("../../collector/main.js", import.meta.url))
+  ];
+}
+async function readCollectorSource() {
+  const candidates = collectorSourceCandidates();
+  for (const candidate of candidates) {
+    try {
+      const info = await lstat(candidate);
+      if (info.isFile())
+        return await readFile2(candidate, "utf8");
+    } catch {}
+  }
+  throw new Error(`找不到 Collector 构建产物：${candidates.join(", ")}`);
+}
+async function installCollectorFile(response) {
+  const target = collectorInstallPath(homedir2(), process.env);
+  if (!isAbsolute(target)) {
+    sendJson(response, 500, { error: "collector_install_failed" });
+    return;
+  }
+  let existing = null;
+  try {
+    const info = await lstat(target);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      sendJson(response, 409, { error: "collector_conflict", path: target });
+      return;
+    }
+    existing = await readFile2(target, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT")
+      throw error;
+  }
+  if (classifyCollectorContent(existing) === "conflict") {
+    sendJson(response, 409, { error: "collector_conflict", path: target });
+    return;
+  }
+  const content = collectorFileContent(await readCollectorSource(), COLLECTOR_VERSION);
+  if (existing === content) {
+    sendJson(response, 200, {
+      ok: true,
+      path: target,
+      version: COLLECTOR_VERSION,
+      changed: false
+    });
+    return;
+  }
+  await mkdir2(dirname(target), { recursive: true });
+  const temporary = `${target}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
+  try {
+    await writeFile2(temporary, content, { mode: 384 });
+    await rename2(temporary, target);
+  } catch (error) {
+    await rm2(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
+  sendJson(response, 200, {
+    ok: true,
+    path: target,
+    version: COLLECTOR_VERSION,
+    changed: true
+  });
 }
 async function probeCollector(record) {
   try {
@@ -207,6 +305,14 @@ var server = createServer((request, response) => {
   }
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   const path = url.pathname;
+  if (request.method === "POST" && path === "/collector/install") {
+    installCollectorFile(response).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[context-map] 安装 Collector 失败：${message}`);
+      sendJson(response, 500, { error: "collector_install_failed" });
+    });
+    return;
+  }
   if (request.method === "GET" && path === "/health") {
     route().then((resolved) => {
       sendJson(response, 200, { ok: true, collector: resolved.status });

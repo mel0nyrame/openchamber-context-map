@@ -40,19 +40,19 @@ OpenCode 组装请求
 
 | 文件 | 主要导出 | 职责 |
 | --- | --- | --- |
-| `src/service/main.ts` | 无（启动即监听） | host service：扫描 discovery、探活 Collector、缓存路由，代理 `/summary` 与 `/item` |
+| `src/service/main.ts` | 无（启动即监听） | host service：扫描 discovery、探活 Collector、缓存路由，代理 `/summary` 与 `/item`，按面板请求安装缺失的 Collector |
 
 ## Panel（src/panel）
 
 | 文件 | 主要导出 | 职责 |
 | --- | --- | --- |
 | `src/panel/main.ts` | 无（模块副作用） | 入口接线：`connectHost` → `createPanelModel` → `createRefreshRun` → `createRefreshController` → `createPanelView`；注册 session、lifecycle、ready 回调与页面可见性监听 |
-| `src/panel/model.ts` | `createPanelModel`、`PanelModel`、`PanelState`、`PanelStatusCopy`、`ItemLoadResult` | 面板状态机：placeholder 与 summary 两类 body、内容优先级、钻取层级、焦点、条目加载；决定状态条与占位区的文案键和参数 |
-| `src/panel/view.ts` | `createPanelView`、`PanelViewHandle` | 把 model 状态渲染成 DOM，处理键盘、点击与滚动 |
+| `src/panel/model.ts` | `createPanelModel`、`PanelModel`、`PanelState`、`PanelStatusCopy`、`CollectorInstallState`、`ItemLoadResult` | 面板状态机：placeholder 与 summary 两类 body、内容优先级、Collector 安装状态、钻取层级、焦点、条目加载；决定状态条与占位区的文案键和参数 |
+| `src/panel/view.ts` | `createPanelView`、`PanelViewHandle` | 把 model 状态渲染成 DOM，处理键盘、点击、滚动与 Collector 安装按钮 |
 | `src/panel/format.ts` | `formatNumber`、`formatPercent`、`compactNumber`、`roundPercent`、`pad2`、`versionLabel`、`intlLocale` | 纯格式化：数字、百分比、紧凑数字、版本标签与 Intl locale 映射；不碰 DOM、时间、文案或视图状态 |
 | `src/panel/signature.ts` | `snapshotSignature`、`breakdownSignature` | 视图重建签名：地图与明细缓存的纯键，只读取 model 类型，不碰 DOM |
 | `src/panel/refresh.ts` | `createRefreshController`、`busyChanged`、`refreshFailed`、`POLL_INTERVAL_MS`、`FAILURE_LIMIT` | 刷新控制器：busy 时每 2 秒轮询、idle 停表、连续失败 3 次停自动刷新、版本横幅；状态转移是纯函数 |
-| `src/panel/refresh-run.ts` | `createRefreshRun` | 一次刷新的请求构造、超时与结果到 model 的映射 |
+| `src/panel/refresh-run.ts` | `createRefreshRun`、`installCollector` | 一次刷新的请求构造、超时与结果到 model 的映射；Collector 安装请求与结果映射 |
 | `src/panel/session.ts` | `applySessionSnapshot` | 把 host 的 session 快照同步给 model 与 controller；只有真正换 session 才请求事件刷新 |
 | `src/panel/failure.ts` | `describeHostFailure`、`HostFailureCopy` | host service 失败码到文案与动作的映射 |
 | `src/panel/i18n.ts` | `t`、`MESSAGES`、`resolveLocale`、`MessageKey` | 文案字典；`en` 是源语言，`zh` 是翻译，其余 locale 回退 `en` |
@@ -68,6 +68,7 @@ OpenCode 组装请求
 | `src/shared/snapshot.ts` | `parseSnapshotSummary`、`parseSnapshotItemDetail` | 线协议校验：字段类型、取值范围、未知字段一律拒绝 |
 | `src/shared/discovery.ts` | `writeDiscovery`、`readDiscoveryEntries`、`resolveDiscoveryDir` | discovery 文件的读写与扫描，权限 0600 / 0700 |
 | `src/shared/version.ts` | `COLLECTOR_VERSION`、`collectorVersionOutdated`、`SERVICE_PORT_ENV` | 版本常量、版本比较、环境变量名 |
+| `src/shared/collector-file.ts` | `COLLECTOR_MARKER`、`collectorHeader`、`collectorFileContent`、`readCollectorVersion`、`classifyCollectorContent`、`collectorInstallPath` | Collector 文件头、归属判断与安装路径；安装脚本与 Service 共用 |
 
 ## Scripts
 
@@ -75,7 +76,7 @@ OpenCode 组装请求
 | --- | --- | --- |
 | `scripts/build.ts` | 无（命令行） | 用 `openchamber-guest-bundle` 生成 `panel/`、`service/`、`collector/` 三个产物 |
 | `scripts/install.ts` | 无（命令行） | 安装与卸载：软链扩展、复制 Collector、改 `extensions.json` |
-| `scripts/install-lib.ts` | `EXTENSION_GUEST_ID` 等 | 安装的纯逻辑与文件操作，供 `install.ts` 与测试复用 |
+| `scripts/install-lib.ts` | `EXTENSION_GUEST_ID` 等 | 安装的纯逻辑与文件操作，供 `install.ts` 与测试复用；Collector 文件逻辑复用 `src/shared/collector-file.ts` |
 | `scripts/dev.ts` | 无（命令行） | 不装 OpenChamber 的开发链路：进程内 Collector、Service 子进程、最小 host 桥；`--fixture` 启动即注入固定快照 |
 | `scripts/check-docs.ts` | 无（命令行） | 校验本文件的覆盖范围：`src/` 与 `scripts/` 下每个 `.ts` 都有一行，且没有指向已删除文件的条目 |
 

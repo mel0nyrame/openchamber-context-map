@@ -65,9 +65,19 @@ export type PanelState =
   | ({ kind: "disconnected"; reason: "not_found" | "unreachable" } & PanelStatusBase)
   | ({ kind: "failed" } & PanelStatusBase);
 
+/** 面板内安装 Collector 的进度；只影响 Collector 缺失时的占位区。 */
+export type CollectorInstallState =
+  | { kind: "idle" }
+  | { kind: "installing" }
+  | { kind: "installed" }
+  | { kind: "conflict" }
+  | { kind: "failed" };
+
 export interface PlaceholderBody extends PanelStatusCopy {
   kind: "placeholder";
   retry: boolean;
+  /** 是否显示「安装 Collector」按钮。 */
+  install: boolean;
 }
 
 export interface SummaryBody {
@@ -111,6 +121,7 @@ export interface PanelView {
   preview: PreviewState | null;
   focus: PanelFocus;
   notice: MessageKey | null;
+  install: CollectorInstallState;
 }
 
 /** `loadItem` 的判别结果；模型只认识这五种情况，不接触 HTTP。 */
@@ -145,6 +156,7 @@ export interface PanelModel {
   focusItemAt(index: number): void;
   focusItemById(itemId: string | null, fallback?: number): void;
   setNotice(notice: MessageKey | null): void;
+  setInstall(state: CollectorInstallState): void;
   getView(): PanelView;
   subscribe(listener: (view: PanelView) => void): () => void;
 }
@@ -181,6 +193,7 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
   let sessionID: string | null = null;
   let busy = false;
   let connection: CollectorStatus | null = null;
+  let install: CollectorInstallState = { kind: "idle" };
   /** 阻断正文的 host 错误。 */
   let hostProblem: HostFailureCopy | null = null;
   /** 只改变状态条的 host 错误；正文继续按连接/摘要渲染。 */
@@ -219,6 +232,31 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
       detailKey: "collectorNotRunningDetail",
       detailArgs: { path: COLLECTOR_INSTALL_PATH },
     };
+  }
+
+  /** Collector 缺失时的安装结果文案；idle/installing 仍显示缺失说明。 */
+  function installCopy(state: CollectorInstallState): PanelStatusCopy {
+    if (state.kind === "installed") {
+      return {
+        titleKey: "collectorInstalledTitle",
+        detailKey: "collectorInstalledDetail",
+      };
+    }
+    if (state.kind === "conflict") {
+      return {
+        titleKey: "collectorConflictTitle",
+        detailKey: "collectorConflictDetail",
+        detailArgs: { path: COLLECTOR_INSTALL_PATH },
+      };
+    }
+    if (state.kind === "failed") {
+      return {
+        titleKey: "collectorInstallFailedTitle",
+        detailKey: "collectorInstallFailedDetail",
+        detailArgs: { path: COLLECTOR_INSTALL_PATH },
+      };
+    }
+    return collectorCopy("not_found");
   }
 
   function status(): PanelState {
@@ -263,11 +301,16 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
       };
     }
     const reason = connection.reason === "unreachable" ? "unreachable" : "not_found";
-    return { kind: "disconnected", versionText: "—", reason, ...collectorCopy(reason) };
+    const copy = reason === "not_found" ? installCopy(install) : collectorCopy(reason);
+    return { kind: "disconnected", versionText: "—", reason, ...copy };
   }
 
-  function placeholder(copy: PanelStatusCopy, retry: boolean): PlaceholderBody {
-    return { kind: "placeholder", ...copy, retry };
+  function placeholder(
+    copy: PanelStatusCopy,
+    retry: boolean,
+    installable = false,
+  ): PlaceholderBody {
+    return { kind: "placeholder", ...copy, retry, install: installable };
   }
 
   function body(): PanelBody {
@@ -285,6 +328,9 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
     }
     if (connection !== null && !connection.connected) {
       const reason = connection.reason === "unreachable" ? "unreachable" : "not_found";
+      if (reason === "not_found") {
+        return placeholder(installCopy(install), true, install.kind !== "installed");
+      }
       return placeholder(collectorCopy(reason), true);
     }
     if (summaryProblem !== null) {
@@ -390,6 +436,7 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
       preview,
       focus: effectiveFocus(),
       notice,
+      install,
     };
   }
 
@@ -446,6 +493,10 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
     setConnection(next) {
       if (sameConnection(connection, next)) return;
       connection = next;
+      // Collector 已经连上时，安装结果不再需要显示；下次缺失会重新从 idle 开始。
+      if (next?.connected === true && install.kind !== "idle") {
+        install = { kind: "idle" };
+      }
       reconcileContent();
       notify();
     },
@@ -643,6 +694,13 @@ export function createPanelModel(deps: PanelModelDeps = {}): PanelModel {
     setNotice(next) {
       if (notice === next) return;
       notice = next;
+      notify();
+    },
+
+    setInstall(next) {
+      if (install.kind === next.kind) return;
+      install = next;
+      reconcileContent();
       notify();
     },
 

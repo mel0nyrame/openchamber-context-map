@@ -18,5 +18,6 @@
 | [0012](0012-baseline-snapshot.zh.md) | 首请求前复用最近一次真实请求的 system 与工具定义 | `src/collector/baseline.ts`、`src/collector/resolver.ts` | 有效 |
 | [0013](0013-panel-localization.zh.md) | 英文是源语言，其余 locale 回退到英文 | `src/panel/i18n.ts` | 有效 |
 | [0014](0014-snapshot-persistence.zh.md) | 快照持久化到 state 目录 | `src/collector/persist.ts`、`src/shared/snapshot.ts` | 有效 |
+| [0015](0015-panel-collector-install.zh.md) | 面板按需安装缺失的 Collector | `src/service/main.ts`、`src/panel/model.ts`、`src/panel/view.ts`、`src/shared/collector-file.ts` | 有效 |
 
 每条记录的中文版与英文版同目录，文件名带 `.zh.md` 后缀。

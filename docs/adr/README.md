@@ -18,5 +18,6 @@ Each record states one decision, the options it rejected, and what follows from 
 | [0012](0012-baseline-snapshot.md) | Before the first request, reuse the most recent real request's system and tools | `src/collector/baseline.ts`, `src/collector/resolver.ts` | Active |
 | [0013](0013-panel-localization.md) | English is the source language; other locales fall back to it | `src/panel/i18n.ts` | Active |
 | [0014](0014-snapshot-persistence.md) | Persist snapshots to the state directory | `src/collector/persist.ts`, `src/shared/snapshot.ts` | Active |
+| [0015](0015-panel-collector-install.md) | Install a missing Collector from the panel | `src/service/main.ts`, `src/panel/model.ts`, `src/panel/view.ts`, `src/shared/collector-file.ts` | Active |
 
 Chinese translations sit next to each record with a `.zh.md` suffix.
