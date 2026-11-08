@@ -5,7 +5,7 @@
 
 [中文](README.zh.md)
 
-See what fills your context window.
+<p align="center"><img src="docs/assets/readme-hero-en.svg" alt="Context Map hero illustration: see what fills your context window, with a 200-cell map and a category breakdown for 21,201 of 1,000,000 tokens" width="100%"></p>
 
 Context Map is an OpenChamber rail panel that shows where the current session's last model request spent its context. It breaks the request into system prompt, tool definitions, user messages, reasoning, tool calls, and tool results, then shows the free space that remains.
 
@@ -327,7 +327,7 @@ collector/       Collector build output
 prototype/       Throwaway UI prototypes (prototype/README.md)
 docs/modules.md  Every source file with its exports and job
 docs/adr/        Architecture decision records, indexed by docs/adr/README.md
-docs/assets/     README screenshots
+docs/assets/     README images
 ```
 
 ## Privacy

@@ -5,7 +5,7 @@
 
 [English](README.md)
 
-看清上下文窗口被什么占满。
+<p align="center"><img src="docs/assets/readme-hero-zh.svg" alt="Context Map 主图（示意图）：看清上下文窗口被什么占满，展示 21,201 / 1,000,000 tokens 的 200 格地图与分类构成" width="100%"></p>
 
 Context Map 是 OpenChamber 右侧 rail 上的一个面板，展示当前 session 最后一次模型请求的上下文都用在了哪里。它把请求拆成 system prompt、工具定义、用户消息、推理、工具调用和工具结果，并显示剩余空间。
 
@@ -327,7 +327,7 @@ collector/       Collector 构建产物
 prototype/       临时 UI 原型（见 prototype/README.md）
 docs/modules.md  每个源文件的导出与职责
 docs/adr/        架构决策记录，索引在 docs/adr/README.md
-docs/assets/     README 截图
+docs/assets/     README 图片
 ```
 
 ## 隐私
