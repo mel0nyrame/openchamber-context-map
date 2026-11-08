@@ -60,6 +60,12 @@ OpenCode 组装请求
 | `src/panel/palette.ts` | `PALETTES`、`paletteCss`、`contrastRatio` | 明暗两套分类色与背景色，输出主题 CSS，附对比度工具 |
 | `src/panel/preview.ts` | `layerOf`、`moveFocus`、`clipPreviewText`、`PanelLayer` | 钻取层级（overview / items / preview）、焦点移动、预览截断判断 |
 
+### 占位区与 Collector 安装
+
+- 状态与文案：`src/panel/model.ts` 的 `body()` 选择 placeholder，`placeholder()` 写入 `retry` 与 `install`，`installCopy()` 决定安装状态文案。
+- 渲染：`src/panel/view.ts` 的 `showPlaceholder()` 控制 Retry 与 Install 两个按钮，`renderContent()` 选择 summary 或 placeholder，`syncRetryControls()` 同步 busy 状态。
+- 测试：`tests/panel-model.test.ts` 断言状态与字段，`tests/panel-view.test.ts` 断言按钮显隐与点击。
+
 ## Shared（src/shared）
 
 | 文件 | 主要导出 | 职责 |

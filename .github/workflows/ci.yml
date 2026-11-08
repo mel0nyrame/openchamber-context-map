@@ -20,3 +20,5 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: bun run check:docs
+      - run: bun run build
+      - run: git diff --exit-code -- panel service collector
