@@ -1,39 +1,69 @@
 # Context Map
 
-Context Map is an OpenChamber rail panel that shows where the current session's last model request spent its context. It has two parts:
+[![checks](https://github.com/mel0nyrame/openchamber-context-map/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mel0nyrame/openchamber-context-map/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-- **OpenChamber extension**: the panel and a host-side Service.
-- **OpenCode Collector**: an in-process OpenCode plugin that records the assembled system prompt, tools, and messages just before a request goes to the provider.
+[中文](README.zh.md)
 
-The panel keeps only the last request per session. Snapshots live in memory, and the Collector also persists a summary of each one, so the panel can restore the last context after OpenCode restarts; item previews are not persisted. Tokens are estimated from character counts and calibrated against the most recent assistant's `input + cache.read + cache.write`. See `docs/adr/0003-token-accounting.md`.
+<p align="center"><img src="docs/assets/readme-hero-en.svg" alt="Context Map hero illustration: see what fills your context window, with a 200-cell map and a category breakdown for 21,201 of 1,000,000 tokens" width="100%"></p>
+
+Context Map is an OpenChamber rail panel that shows where the current session's last model request spent its context. It breaks the request into system prompt, tool definitions, user messages, reasoning, tool calls, and tool results, then shows the free space that remains.
+
+<p align="center">
+  <img src="docs/assets/panel-dark.png" alt="Context Map panel in dark theme, showing token usage, a 200-cell context map, and a category breakdown" width="49%">
+  <img src="docs/assets/panel-light.png" alt="Context Map panel in light theme, showing the same views" width="49%">
+</p>
+
+<p align="center"><sub>Dark and light themes. The panel follows OpenChamber's theme.</sub></p>
+
+## Features
+
+- **Context usage**: model, `used / window`, percentage, and badges for estimated numbers, an assumed window, or a baseline snapshot.
+- **Context map**: 200 cells, each 1/200 of the denominator. Used cells are colored by category; free space is outlined.
+- **Breakdown**: one row per non-empty category plus Free space. Open a row to list its items, then open an item to read its preview.
 
 ## Requirements
 
-- macOS or Linux. Only macOS has been verified; Windows is untested.
-- [Bun](https://bun.sh/) 1.3 or newer.
-- OpenChamber 2.5.2 (verified version).
-- OpenCode 2.2.2 (verified version) with the V2 plugin API.
-- For the checkout install, a stable repository path. The extension is installed as a symlink, so do not move or delete the checkout afterwards.
+**To install**
 
+- macOS or Linux. Only macOS has been verified; Windows is untested.
+- OpenChamber 2.7.0 or newer for the one-click install. The manual install is verified on OpenChamber 2.5.2.
+- OpenCode 2.2.2 or newer with the V2 plugin API. OpenChamber 2.7.0 bundles OpenCode 2.2.6.
+
+**To develop**
+
+- [Bun](https://bun.sh/) 1.3 or newer.
 ## Install
 
-### From OpenChamber
+### From OpenChamber (recommended)
 
-In OpenChamber, open **Settings → Extensions** and install the extension from this repository's Git URL. Approve the `service` capability. Then open the **Context Map** panel.
+1. Open **Settings → Extensions**.
+2. Paste the repository URL into **Folder, ZIP, or URL**:
 
-If the panel says `Collector is not running`, click **Install Collector**. The Service copies the bundled `collector/main.js` to `~/.config/opencode/plugins/context-map.js` with the `@context-map-collector` marker. It writes only when the file is missing or was created by this tool; it never overwrites your own plugin.
+   ```text
+   https://github.com/mel0nyrame/openchamber-context-map.git
+   ```
 
-Then **fully quit** OpenCode and OpenChamber, and reopen them. OpenCode loads the Collector only at process start. The panel install uses the default OpenCode config directory; if you set `XDG_CONFIG_HOME`, use the checkout install below.
+3. Click **Add**.
+4. Approve the **Service** capability. The extension does not ask for an OpenCode plugin permission.
+5. Open **Context Map** from the rail.
+6. If the panel says `Collector is not running`, click **Install Collector**. The Service copies the bundled `collector/main.js` to `~/.config/opencode/plugins/context-map.js` with the `@context-map-collector` marker. It writes only when the file is missing or was created by this tool; it never overwrites your own plugin.
+7. **Fully quit** OpenCode and OpenChamber, then reopen them. OpenCode loads the Collector only at process start.
 
-### From a checkout
+This path needs OpenChamber 2.7.0 or newer. The panel install uses the default OpenCode config directory; if you set `XDG_CONFIG_HOME`, use the manual install below.
+
+<details>
+<summary>Manual install (development or older OpenChamber)</summary>
+
+The manual install is verified on OpenChamber 2.5.2 and OpenCode 2.2.2. It needs [Bun](https://bun.sh/) 1.3 or newer and a stable repository path. It creates a symlink, copies the Collector into the OpenCode plugin directory, and registers the extension in `extensions.json`. It also honors `XDG_CONFIG_HOME`.
 
 ```bash
-git clone <repository-url> openchamber-context-map
+git clone https://github.com/mel0nyrame/openchamber-context-map.git
 cd openchamber-context-map
 bun run install
 ```
 
-Only Bun is required. The installer needs no `node_modules` and does not build anything. It performs three steps:
+The installer needs no `node_modules` and does not build anything. It performs three steps:
 
 1. Creates the symlink `~/.config/openchamber/extensions/context-map` pointing at the repository root.
 2. Copies `collector/main.js` to `~/.config/opencode/plugins/context-map.js` with a version marker on the first line.
@@ -43,7 +73,7 @@ After installing, **fully quit** OpenCode and OpenChamber, then reopen them:
 
 - OpenCode must exit completely. Closing the window is not enough; the Collector only loads at process start.
 - Open the **Context Map** panel from the rail in OpenChamber.
-- The status dot next to the title is green and shows `v0.2.0`; hovering it reads `Collector connected · v0.2.0`. If it says `Collector is not running`, confirm that OpenCode was actually restarted.
+- The status dot next to the title is green and shows the installed version, for example `v0.2.0`; hovering it reads `Collector connected · v0.2.0`. If it says `Collector is not running`, confirm that OpenCode was actually restarted.
 
 Default paths:
 
@@ -64,23 +94,55 @@ The installer is idempotent: running it again does not create a second symlink, 
 
 Quit OpenChamber before installing or uninstalling. A running host may rewrite `extensions.json` at the same time, and the change requires a restart anyway.
 
+</details>
+
 ## Use
 
-The panel has three parts:
+### Context usage
 
-- **Context usage**: model name, `used / window`, percentage, and badges for estimated numbers, an assumed window, or a baseline snapshot. The status dot and version sit next to the title, and a small refresh button reloads the snapshot.
-- **Context map**: 200 cells, each representing 1/200 of the denominator. Used cells are colored by category; the remaining cells are outlined to show free space. Press `Z` or click the Zoom label to switch between `Window` and `Fit`. Fit sets the denominator to `min(window, ceil2sig(used × 1.15))`, with a 10k floor.
-- **Breakdown**: one row per non-empty category plus Free space. Click a row to list its items; click an item to read its preview. `Esc` goes back one level, `↑`/`↓` or `j`/`k` moves, and `Enter` opens the focused row.
+The card shows the model name, `used / window`, the percentage, and badges for estimated numbers, an assumed window, or a baseline snapshot. The status dot and version sit next to the title. The refresh button reloads the snapshot.
 
-Before a session's first request, the panel shows a **baseline** built from the most recent real request for the same agent and model: system prompt and tool definitions only. It is marked `baseline` and `estimated`, and the first real request replaces it. If no such request exists yet, the panel waits for the first request instead.
+### Context map
+
+200 cells, each representing 1/200 of the denominator. Used cells are colored by category; the remaining cells are outlined to show free space. Press `Z` or click the Zoom label to switch between `Window` and `Fit`. `Window` uses the model's context window. `Fit` uses `min(window, ceil2sig(used × 1.15))`, with a 10k floor.
+
+### Breakdown
+
+One row per non-empty category plus Free space. Click a row to list its items; click an item to read its preview. `Esc` goes back one level, `↑`/`↓` or `j`/`k` moves, and `Enter` opens the focused row.
+
+### Baseline
+
+Before a session's first request, the panel shows a baseline built from the most recent real request for the same agent and model: system prompt and tool definitions only. It is marked `baseline` and `estimated`, and the first real request replaces it. If no such request exists yet, the panel waits for the first request instead.
+
+### Restore and persistence
 
 The Collector saves each snapshot's summary to disk, so the panel still shows the last context after OpenCode restarts. Restored snapshots are marked `last run`. Only the summary and item heads are kept; item previews are not, so opening an item from a restored snapshot says the preview is unavailable until a new request arrives.
 
+### Language
+
 The panel follows OpenChamber's language. English is the source language; Chinese is translated; any other locale falls back to English.
+
+## How it works
+
+Context Map has two parts:
+
+- **OpenChamber extension**: the panel and a host-side Service.
+- **OpenCode Collector**: an in-process OpenCode plugin that records the assembled system prompt, tools, and messages just before a request goes to the provider.
+
+The panel keeps only the last request per session. Snapshots live in memory, and the Collector also persists a summary of each one, so the panel can restore the last context after OpenCode restarts; item previews are not persisted. Tokens are estimated from character counts and calibrated against the most recent assistant's `input + cache.read + cache.write`. See [`docs/adr/0003-token-accounting.md`](docs/adr/0003-token-accounting.md).
 
 ## Upgrade
 
-The extension directory is a symlink for a checkout install, so OpenChamber picks up repository changes on reload. A link install updates through **Settings → Extensions**. The Collector is a copy in the OpenCode plugin directory. A missing Collector can be installed from the panel; an existing Collector only updates when the installer runs again. For a checkout, upgrade both together:
+### From OpenChamber
+
+Open **Settings → Extensions** and update Context Map when a new version is available. If the card does not offer an update, remove the extension and add it again from the same URL. Updating the extension does not replace an existing Collector. A missing Collector can be installed from the panel; an existing Collector only updates when the installer runs again.
+
+If the panel says the Collector is outdated after an update, run the manual upgrade below. The panel only warns; it never updates an existing Collector automatically (see [`docs/adr/0008-degradation-layers.md`](docs/adr/0008-degradation-layers.md)).
+
+<details>
+<summary>Manual upgrade steps</summary>
+
+The extension directory is a symlink for a checkout install, so OpenChamber picks up repository changes on reload. The Collector is a copy in the OpenCode plugin directory and only updates when the installer runs again. Upgrade both together:
 
 ```bash
 cd openchamber-context-map
@@ -90,7 +152,7 @@ bun run install
 
 Then fully quit and reopen OpenCode and OpenChamber. Installer output such as `Updated: ... (old -> new)` or `Build artifacts updated` means the Collector was replaced.
 
-### The panel says the Collector is outdated
+#### The panel says the Collector is outdated
 
 The running Collector version does not match the version the extension expects. The panel only warns; it never updates an existing Collector automatically (see `docs/adr/0008-degradation-layers.md`).
 
@@ -108,7 +170,16 @@ head -1 ~/.config/opencode/plugins/context-map.js
 
 The first line should be `// @context-map-collector v<version>`. If the file is current but the panel still warns, an old OpenCode process is usually still running; quit all instances and retry. `pgrep -fl opencode` lists leftovers.
 
+</details>
+
 ## Uninstall
+
+### From OpenChamber
+
+Open **Settings → Extensions**, find Context Map, and remove it. This removes the extension and its Service. It does not remove the Collector copy at `~/.config/opencode/plugins/context-map.js`; use the manual uninstall below to remove it. Restart OpenChamber if the rail still shows the panel.
+
+<details>
+<summary>Manual uninstall steps</summary>
 
 ```bash
 cd openchamber-context-map
@@ -125,19 +196,19 @@ Uninstall removes only:
 
 Other extensions, your own plugins, and unknown registry fields are preserved. Restart OpenCode and OpenChamber afterwards. If a target was not created by this tool, the script keeps it and exits non-zero; inspect it before removing anything by hand.
 
+</details>
+
 ## Troubleshooting
 
 ### Collector is not running
 
 The panel shows `Collector is not running` and mentions a missing discovery file.
 
-1. Confirm the plugin file exists:
+If you installed from OpenChamber:
 
-   ```bash
-   ls -l ~/.config/opencode/plugins/context-map.js
-   ```
-
-2. Confirm OpenCode is running and the discovery directory has a file for the current process:
+1. If the panel shows **Install Collector**, click it. The Service copies the bundled Collector to `~/.config/opencode/plugins/context-map.js` with the `@context-map-collector` marker. It writes only when the file is missing or was created by this tool. If the button is missing, confirm that Context Map is enabled with the **Service** capability; reinstall the extension from the same URL if it is not.
+2. **Fully quit** OpenCode and reopen it. The Collector loads only at process start.
+3. Confirm that the discovery directory has a file for the current process:
 
    ```bash
    ls -l ~/.local/state/openchamber-context-map/collectors/
@@ -145,9 +216,19 @@ The panel shows `Collector is not running` and mentions a missing discovery file
 
    You should see `collector-<pid>.json`. If `CONTEXT_MAP_DISCOVERY_DIR` is set, look there instead.
 
-3. If the file is missing and the panel shows **Install Collector**, click it. Otherwise run `bun run install` from a checkout. Then fully quit and reopen OpenCode. An old OpenCode version, a plugin load error, or closing only the window can all prevent the Collector from loading.
+4. If the file is still missing, click **Install Collector** again, or run `bun run install` from a checkout, then fully quit and reopen OpenCode. An old OpenCode version, a plugin load error, or closing only the window can all prevent the Collector from loading.
 
-`opencode plugin list` only lists plugins installed as packages, not local files in `~/.config/opencode/plugins/`; `No plugins found` there does not mean the Collector is missing.
+If the panel says **Collector file already exists**, the file is not from this tool. Move or rename it, then click **Install Collector** again. The Service returns a conflict and never overwrites the file.
+
+If you used the manual install, also confirm the plugin file exists:
+
+```bash
+ls -l ~/.config/opencode/plugins/context-map.js
+```
+
+If it is missing, run `bun run install` again, then fully quit and reopen OpenCode.
+
+`opencode plugin list` only lists plugins installed as packages. When you use the manual install, it does not list local files in `~/.config/opencode/plugins/`; `No plugins found` there does not mean the Collector is missing.
 
 If the discovery file exists but the panel says `Collector is not responding`, a stale discovery file from an old process is the usual cause. Quit OpenCode, delete `collector-*.json` in that directory, and reopen OpenCode.
 
@@ -155,8 +236,8 @@ If the discovery file exists but the panel says `Collector is not responding`, a
 
 The panel shows `Service is not ready`, or the host returns `NO_SERVICE` / `NOT_GRANTED`.
 
-1. Open **Settings → Extensions** in OpenChamber and confirm that Context Map is enabled with the Service capability granted.
-2. Run `bun run install` again; it registers the extension and grants `service` if the registry entry is missing it.
+1. Open **Settings → Extensions** and confirm that Context Map is enabled with the Service capability granted. If it is missing, reinstall the extension from the same URL.
+2. If you used the manual install, run `bun run install` again; it registers the extension and grants `service` if the registry entry is missing it.
 3. Fully quit and reopen OpenChamber.
 
 If the panel shows `Service stopped` (`SERVICE_FAILED`), restart OpenChamber first. If it still fails, check for multiple OpenChamber instances or look for Service startup errors in the OpenChamber log.
@@ -180,8 +261,8 @@ OpenChamber assigns the Service port through `OPENCHAMBER_SERVICE_PORT`; the Col
 
 ### The panel is missing from the rail
 
-1. Open **Settings → Extensions** and confirm that Context Map is not disabled.
-2. Check that `paths` in `~/.config/openchamber/extensions.json` contains `.../extensions/context-map`; rerun `bun run install` if it does not.
+1. Open **Settings → Extensions** and confirm that Context Map is not disabled. Enable it if it is.
+2. If you used the manual install, check that `paths` in `~/.config/openchamber/extensions.json` contains `.../extensions/context-map`; rerun `bun run install` if it does not.
 3. Fully quit and reopen OpenChamber. A running host does not notice external registry changes.
 
 ### The installer refuses to continue
@@ -254,9 +335,12 @@ collector/       Collector build output
 prototype/       Throwaway UI prototypes (prototype/README.md)
 docs/modules.md  Every source file with its exports and job
 docs/adr/        Architecture decision records, indexed by docs/adr/README.md
+docs/assets/     README images
 ```
 
 ## Privacy
+
+Context Map itself makes no external network requests; the Collector and Service communicate over loopback only.
 
 - Each session keeps only its last request, up to 20 sessions.
 - The Collector saves each snapshot's summary to `~/.local/state/openchamber-context-map/snapshots`: item heads (200 characters), token counts, and the model name. Item previews are not saved. Files are mode 0600 in a 0700 directory and expire after 7 days.
