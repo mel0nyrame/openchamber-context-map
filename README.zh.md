@@ -33,7 +33,6 @@ Context Map 是 OpenChamber 右侧 rail 上的一个面板，展示当前 sessio
 **开发**
 
 - [Bun](https://bun.sh/) 1.3 或更高版本。
-
 ## 安装
 
 ### 从 OpenChamber 安装（推荐）
@@ -46,15 +45,17 @@ Context Map 是 OpenChamber 右侧 rail 上的一个面板，展示当前 sessio
    ```
 
 3. 点击 **Add**。
-4. 批准 OpenChamber 请求的权限。扩展需要 **Service** 能力和运行其 **OpenCode 插件**的权限。
+4. 批准 **Service** 能力。扩展不会请求 OpenCode 插件权限。
 5. 从 rail 打开 **Context Map**。
+6. 如果面板显示「Collector 未运行」，点击 **安装 Collector**。Service 会把扩展包内的 `collector/main.js` 复制到 `~/.config/opencode/plugins/context-map.js`，并写入 `@context-map-collector` 标记。只有文件缺失或由本工具创建时才写入；不会覆盖你自己的插件。
+7. **完全退出** OpenCode 与 OpenChamber，再重新打开。OpenCode 只在进程启动时加载 Collector。
 
-一键安装需要 OpenChamber 2.7.0 或更高版本。扩展已包含 Collector，不需要单独安装。OpenChamber 会自动加载扩展及其 OpenCode 插件。如果面板没有出现，重启一次 OpenChamber；如果仍显示 `Collector 未运行`，重启 OpenCode。
+一键安装需要 OpenChamber 2.7.0 或更高版本。面板安装使用默认的 OpenCode 配置目录；如果设置了 `XDG_CONFIG_HOME`，请使用下面的手动安装。
 
 <details>
 <summary>手动安装（开发或旧版 OpenChamber）</summary>
 
-手动安装已在 OpenChamber 2.5.2 和 OpenCode 2.2.2 上验证。它需要 [Bun](https://bun.sh/) 1.3 或更高版本，以及稳定的仓库路径。它会创建软链、把 Collector 复制到 OpenCode 插件目录，并在 `extensions.json` 中登记扩展。
+手动安装已在 OpenChamber 2.5.2 和 OpenCode 2.2.2 上验证。它需要 [Bun](https://bun.sh/) 1.3 或更高版本，以及稳定的仓库路径。它会创建软链、把 Collector 复制到 OpenCode 插件目录，并在 `extensions.json` 中登记扩展；它也遵循 `XDG_CONFIG_HOME`。
 
 ```bash
 git clone https://github.com/mel0nyrame/openchamber-context-map.git
@@ -78,7 +79,7 @@ bun run install
 
 | 项目 | 路径 |
 | --- | --- |
-| 扩展软链 | `~/.config/openchamber/extensions/context-map` → 仓库根目录 |
+| 扩展目录 | `~/.config/openchamber/extensions/context-map` → 仓库根目录（本地仓库安装时为软链） |
 | Collector | `~/.config/opencode/plugins/context-map.js` |
 | 扩展注册表 | `~/.config/openchamber/extensions.json` |
 
@@ -89,20 +90,9 @@ OPENCHAMBER_DATA_DIR=/path/to/openchamber bun run install
 XDG_CONFIG_HOME=/path/to/config bun run install
 ```
 
-安装脚本是幂等的：再次运行不会创建第二个软链、第二个 Collector 文件，也不会写入重复的注册表条目。它只接受空目标、指向本仓库的软链，或带 `@context-map-collector` 标记的 Collector 文件。如果目标已存在且不是本工具创建的，安装脚本会停止，并保留原文件不动。
+安装脚本是幂等的：再次运行不会创建第二个软链、第二个 Collector 文件，也不会写入重复的注册表条目。它只接受空目标、指向本仓库的软链，或带 `@context-map-collector` 标记的 Collector 文件。面板的 **安装 Collector** 按钮遵循同一套标记规则。如果目标已存在且不是本工具创建的，安装脚本会停止，并保留原文件不动。
 
 安装或卸载前先退出 OpenChamber。运行中的 host 可能同时改写 `extensions.json`，而且改动本来就需要重启才能生效。
-
-#### 安装脚本拒绝继续
-
-如果它报告扩展或 Collector 目标已存在，说明没有覆盖任何内容。检查目标：
-
-```bash
-ls -ld ~/.config/openchamber/extensions/context-map
-ls -l ~/.config/opencode/plugins/context-map.js
-```
-
-如果是你以前留下的文件，先备份并移走，再运行 `bun run install`。不要删除来源不明的目录。
 
 </details>
 
@@ -145,14 +135,14 @@ Context Map 由两部分组成：
 
 ### 从 OpenChamber 升级
 
-有新版本时，打开 **Settings → Extensions** 更新 Context Map。如果卡片没有更新按钮，移除扩展，再用同一个地址重新添加。扩展和随扩展安装的 Collector 会一起更新。
+有新版本时，打开 **Settings → Extensions** 更新 Context Map。如果卡片没有更新按钮，移除扩展，再用同一个地址重新添加。更新扩展不会替换已有的 Collector。缺失的 Collector 可以从面板安装；已存在的 Collector 只有再次运行安装脚本才会更新。
 
-如果更新后面板提示 Collector 版本过旧，完全退出每一个 OpenCode 实例，再重新打开。面板只提示，不会自动更新 Collector（见 [`docs/adr/0008-degradation-layers.zh.md`](docs/adr/0008-degradation-layers.zh.md)）。
+如果更新后面板提示 Collector 版本过旧，请执行下面的手动升级。面板只提示，不会自动更新已有的 Collector（见 [`docs/adr/0008-degradation-layers.zh.md`](docs/adr/0008-degradation-layers.zh.md)）。
 
 <details>
 <summary>手动升级步骤</summary>
 
-扩展目录是软链，OpenChamber 重新加载时就会读到仓库改动。Collector 是 OpenCode 插件目录中的副本，只有再次运行安装脚本才会更新。两者要一起升级：
+扩展目录在本地仓库安装时是软链，OpenChamber 重新加载时就会读到仓库改动。Collector 是 OpenCode 插件目录中的副本，只有再次运行安装脚本才会更新。两者要一起升级：
 
 ```bash
 cd openchamber-context-map
@@ -164,11 +154,13 @@ bun run install
 
 #### 面板提示 Collector 版本过旧
 
-正在运行的 Collector 版本与扩展期望的版本不一致。面板只提示，不会自动更新 Collector（见 `docs/adr/0008-degradation-layers.zh.md`）。
+正在运行的 Collector 版本与扩展期望的版本不一致。面板只提示，不会自动更新已存在的 Collector（见 `docs/adr/0008-degradation-layers.zh.md`）。
 
 1. 在仓库中运行 `bun run install`，确认 Collector 已更新到期望版本。
 2. 完全退出**每一个** OpenCode 实例，再重新打开。只关一个窗口或只重启一个实例，可能留下旧进程。
 3. 状态应恢复为 `Collector 已连接 · vX.Y.Z`，警告消失。
+
+如果扩展是通过链接安装的，就没有可运行安装脚本的本地仓库。先退出 OpenCode，确认插件文件以标记开头，删除该文件，重新打开面板并点击 **安装 Collector**；Service 会写入当前扩展包内的副本。然后重新打开 OpenCode。
 
 如果警告仍在，检查：
 
@@ -184,7 +176,7 @@ head -1 ~/.config/opencode/plugins/context-map.js
 
 ### 从 OpenChamber 卸载
 
-打开 **Settings → Extensions**，找到 Context Map 并移除。扩展和随扩展安装的 Collector 会一起删除。如果 rail 中仍显示面板，重启 OpenChamber。
+打开 **Settings → Extensions**，找到 Context Map 并移除。这会移除扩展和它的 Service，但不会删除 `~/.config/opencode/plugins/context-map.js` 中的 Collector 副本；要删除 Collector，请使用下面的手动卸载。如果 rail 中仍显示面板，重启 OpenChamber。
 
 <details>
 <summary>手动卸载步骤</summary>
@@ -193,6 +185,8 @@ head -1 ~/.config/opencode/plugins/context-map.js
 cd openchamber-context-map
 bun run uninstall
 ```
+
+如果扩展是通过链接安装的，请在 **Settings → Extensions** 中卸载，然后删除 `~/.config/opencode/plugins/context-map.js`（确认首行带有标记）。
 
 卸载只删除：
 
@@ -212,8 +206,9 @@ bun run uninstall
 
 从 OpenChamber 安装时：
 
-1. 打开 **Settings → Extensions**，确认 Context Map 已启用，且已授予 OpenCode 插件权限。如果未启用或未授权，启用扩展或授予权限。
-2. 确认 OpenCode 正在运行，且发现目录中有当前进程的文件：
+1. 如果面板显示 **安装 Collector**，点击它。Service 会把扩展包内的 Collector 复制到 `~/.config/opencode/plugins/context-map.js`，并写入 `@context-map-collector` 标记。只有文件缺失或由本工具创建时才写入。如果按钮缺失，确认 Context Map 已启用且已授予 **Service** 能力；如果没有，用同一个地址重新安装扩展。
+2. **完全退出** OpenCode，再重新打开。Collector 只在进程启动时加载。
+3. 确认发现目录中有当前进程的文件：
 
    ```bash
    ls -l ~/.local/state/openchamber-context-map/collectors/
@@ -221,7 +216,9 @@ bun run uninstall
 
    应看到 `collector-<pid>.json`。如果设置了 `CONTEXT_MAP_DISCOVERY_DIR`，到该目录查看。
 
-3. 如果文件缺失，更新或重新安装扩展，然后重启 OpenCode。OpenCode 版本过旧、插件加载失败，或只关闭窗口，都可能让 Collector 无法加载。
+4. 如果文件仍然缺失，再次点击 **安装 Collector**，或在本地仓库运行 `bun run install`，然后完全退出并重新打开 OpenCode。OpenCode 版本过旧、插件加载失败，或只关闭窗口，都可能让 Collector 无法加载。
+
+如果面板显示「Collector 文件已存在」，说明该文件不是本工具创建的。移走或重命名它，再点击 **安装 Collector**。Service 会返回冲突，不会覆盖文件。
 
 使用手动安装时，还要确认插件文件存在：
 
@@ -267,6 +264,17 @@ OpenChamber 通过 `OPENCHAMBER_SERVICE_PORT` 分配 Service 端口；Collector 
 1. 打开 **Settings → Extensions**，确认 Context Map 没有被禁用。如果被禁用，启用它。
 2. 使用手动安装时，检查 `~/.config/openchamber/extensions.json` 的 `paths` 是否包含 `.../extensions/context-map`；如果没有，重新运行 `bun run install`。
 3. 完全退出并重新打开 OpenChamber。运行中的 host 不会察觉外部对注册表的修改。
+
+### 安装脚本拒绝继续
+
+如果它报告扩展或 Collector 目标已存在，说明没有覆盖任何内容。检查目标：
+
+```bash
+ls -ld ~/.config/openchamber/extensions/context-map
+ls -l ~/.config/opencode/plugins/context-map.js
+```
+
+如果是你以前留下的文件，先备份并移走，再运行 `bun run install`。不要删除来源不明的目录。面板的 **安装 Collector** 按钮遵循同一规则：返回冲突并保留原文件。
 
 ## 开发
 

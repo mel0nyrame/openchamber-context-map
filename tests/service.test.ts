@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmod, mkdtemp, readdir, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawn, type Subprocess } from "bun";
 
+import { collectorFileContent } from "../src/shared/collector-file.ts";
 import { writeDiscovery } from "../src/shared/discovery.ts";
 import { COLLECTOR_VERSION } from "../src/shared/version.ts";
 
@@ -15,6 +16,7 @@ const ROOT = join(import.meta.dir, "..");
 let service: Subprocess | undefined;
 let collector: ReturnType<typeof Bun.serve> | undefined;
 let discoveryDir: string | undefined;
+let configHome: string | undefined;
 
 interface SeenRequest {
   path: string;
@@ -38,6 +40,10 @@ afterEach(async () => {
     await rm(discoveryDir, { recursive: true, force: true });
     discoveryDir = undefined;
   }
+  if (configHome) {
+    await rm(configHome, { recursive: true, force: true });
+    configHome = undefined;
+  }
 });
 
 async function freePort(): Promise<number> {
@@ -52,8 +58,12 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-async function startService(prepare?: (dir: string) => Promise<void>): Promise<{ port: number; base: string }> {
+async function startService(
+  prepare?: (dir: string) => Promise<void>,
+): Promise<{ port: number; base: string; configHome: string }> {
   discoveryDir = await mkdtemp(join(tmpdir(), "context-map-service-"));
+  const home = await mkdtemp(join(tmpdir(), "context-map-config-"));
+  configHome = home;
   if (prepare) await prepare(discoveryDir);
   const port = await freePort();
   service = spawn(["bun", "src/service/main.ts"], {
@@ -63,6 +73,7 @@ async function startService(prepare?: (dir: string) => Promise<void>): Promise<{
       OPENCHAMBER_SERVICE_PORT: String(port),
       OPENCHAMBER_SERVICE_TOKEN: TOKEN,
       CONTEXT_MAP_DISCOVERY_DIR: discoveryDir,
+      XDG_CONFIG_HOME: configHome,
     },
     stdout: "ignore",
     stderr: "pipe",
@@ -74,7 +85,9 @@ async function startService(prepare?: (dir: string) => Promise<void>): Promise<{
       const response = await fetch(`http://127.0.0.1:${port}/health`, {
         headers: { Authorization: `Bearer ${TOKEN}` },
       });
-      if (response.status === 200) return { port, base: `http://127.0.0.1:${port}` };
+      if (response.status === 200) {
+        return { port, base: `http://127.0.0.1:${port}`, configHome: home };
+      }
     } catch {
       // Service 还没开始监听。
     }
@@ -472,4 +485,72 @@ test("Collector 返回 500 时 Service 返回 503", async () => {
   const response = await fetch(`${base}/summary?sessionID=session-1`, { headers: hostAuth() });
   expect(response.status).toBe(503);
   expect(await response.json()).toEqual({ error: "collector_unavailable" });
+});
+
+async function installCollector(base: string, token = TOKEN): Promise<Response> {
+  return fetch(`${base}/collector/install`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+test("安装接口要求 bearer", async () => {
+  const { base } = await startService();
+  const response = await fetch(`${base}/collector/install`, { method: "POST" });
+  expect(response.status).toBe(401);
+});
+
+test("安装 Collector 写入插件目录并带版本标记", async () => {
+  const { base, configHome: home } = await startService();
+  const target = join(home, "opencode", "plugins", "context-map.js");
+
+  const first = await installCollector(base);
+  expect(first.status).toBe(200);
+  expect(await first.json()).toEqual({
+    ok: true,
+    path: target,
+    version: COLLECTOR_VERSION,
+    changed: true,
+  });
+
+  const source = await readFile(join(ROOT, "collector/main.js"), "utf8");
+  expect(await readFile(target, "utf8")).toBe(
+    collectorFileContent(source, COLLECTOR_VERSION),
+  );
+
+  const second = await installCollector(base);
+  expect(second.status).toBe(200);
+  expect(await second.json()).toEqual({
+    ok: true,
+    path: target,
+    version: COLLECTOR_VERSION,
+    changed: false,
+  });
+});
+
+test("已有用户文件时安装返回冲突且保持原样", async () => {
+  const { base, configHome: home } = await startService();
+  const target = join(home, "opencode", "plugins", "context-map.js");
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, "// user plugin\n");
+
+  const response = await installCollector(base);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ error: "collector_conflict", path: target });
+  expect(await readFile(target, "utf8")).toBe("// user plugin\n");
+});
+
+test("目标是软链时安装返回冲突", async () => {
+  const { base, configHome: home } = await startService();
+  const target = join(home, "opencode", "plugins", "context-map.js");
+  const other = join(home, "other.js");
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(other, collectorFileContent("", COLLECTOR_VERSION));
+  await symlink(other, target);
+
+  const response = await installCollector(base);
+  expect(response.status).toBe(409);
+  expect(await readFile(target, "utf8")).toBe(
+    collectorFileContent("", COLLECTOR_VERSION),
+  );
 });

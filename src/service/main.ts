@@ -1,5 +1,15 @@
+import { randomBytes } from "node:crypto";
+import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
+import { homedir } from "node:os";
+import { dirname, isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 
+import {
+  classifyCollectorContent,
+  collectorFileContent,
+  collectorInstallPath,
+} from "../shared/collector-file.ts";
 import {
   readDiscoveryEntries,
   removeDiscovery,
@@ -36,6 +46,84 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
     "Cache-Control": "no-store",
   });
   response.end(JSON.stringify(body));
+}
+
+function collectorSourceCandidates(): string[] {
+  return [
+    fileURLToPath(new URL("../collector/main.js", import.meta.url)),
+    fileURLToPath(new URL("../../collector/main.js", import.meta.url)),
+  ];
+}
+
+/** 读取随扩展发布的 Collector 构建产物；Service 从 `service/` 或 `src/service/` 启动时都能找到。 */
+async function readCollectorSource(): Promise<string> {
+  const candidates = collectorSourceCandidates();
+  for (const candidate of candidates) {
+    try {
+      const info = await lstat(candidate);
+      if (info.isFile()) return await readFile(candidate, "utf8");
+    } catch {
+      // 继续尝试下一个候选路径。
+    }
+  }
+  throw new Error(`找不到 Collector 构建产物：${candidates.join(", ")}`);
+}
+
+/**
+ * 把扩展自带的 Collector 写到 OpenCode 插件目录。
+ * 只覆盖缺失文件或本工具生成的文件；用户自己的文件一律返回冲突，保持原样。
+ */
+async function installCollectorFile(response: ServerResponse): Promise<void> {
+  const target = collectorInstallPath(homedir(), process.env);
+  if (!isAbsolute(target)) {
+    sendJson(response, 500, { error: "collector_install_failed" });
+    return;
+  }
+
+  let existing: string | null = null;
+  try {
+    const info = await lstat(target);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      sendJson(response, 409, { error: "collector_conflict", path: target });
+      return;
+    }
+    existing = await readFile(target, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  if (classifyCollectorContent(existing) === "conflict") {
+    sendJson(response, 409, { error: "collector_conflict", path: target });
+    return;
+  }
+
+  const content = collectorFileContent(await readCollectorSource(), COLLECTOR_VERSION);
+  if (existing === content) {
+    sendJson(response, 200, {
+      ok: true,
+      path: target,
+      version: COLLECTOR_VERSION,
+      changed: false,
+    });
+    return;
+  }
+
+  await mkdir(dirname(target), { recursive: true });
+  const temporary = `${target}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
+  try {
+    await writeFile(temporary, content, { mode: 0o600 });
+    await rename(temporary, target);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
+
+  sendJson(response, 200, {
+    ok: true,
+    path: target,
+    version: COLLECTOR_VERSION,
+    changed: true,
+  });
 }
 
 async function probeCollector(record: DiscoveryRecord): Promise<CollectorStatus | null> {
@@ -204,6 +292,15 @@ const server = createServer((request, response) => {
 
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   const path = url.pathname;
+
+  if (request.method === "POST" && path === "/collector/install") {
+    void installCollectorFile(response).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[context-map] 安装 Collector 失败：${message}`);
+      sendJson(response, 500, { error: "collector_install_failed" });
+    });
+    return;
+  }
 
   if (request.method === "GET" && path === "/health") {
     void route().then((resolved) => {

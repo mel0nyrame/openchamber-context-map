@@ -37,6 +37,7 @@ describe("PanelModel 内容优先级", () => {
       titleKey: "connectingTitle",
       detailKey: "connectingDetail",
       retry: false,
+      install: false,
     });
   });
 
@@ -368,6 +369,7 @@ describe("PanelModel 状态", () => {
       "body",
       "breakdown",
       "focus",
+      "install",
       "items",
       "layer",
       "layout",
@@ -440,5 +442,72 @@ describe("PanelModel 订阅", () => {
     model.setSession("ses_one", false);
     model.setSession("ses_one", false);
     expect(calls).toBe(2);
+  });
+});
+
+describe("PanelModel Collector 安装", () => {
+  test("Collector 缺失时显示安装按钮", () => {
+    const model = readyModel();
+    model.setConnection({ connected: false, reason: "not_found" });
+    const view = model.getView();
+    expect(view.install).toEqual({ kind: "idle" });
+    expect(placeholder(view)).toMatchObject({
+      titleKey: "collectorNotRunning",
+      detailKey: "collectorNotRunningDetail",
+      detailArgs: { path: COLLECTOR_INSTALL_PATH },
+      retry: true,
+      install: true,
+    });
+  });
+
+  test("安装成功后提示重启并隐藏安装按钮", () => {
+    const model = readyModel();
+    model.setConnection({ connected: false, reason: "not_found" });
+    model.setInstall({ kind: "installed" });
+    const view = model.getView();
+    expect(view.install).toEqual({ kind: "installed" });
+    expect(placeholder(view)).toMatchObject({
+      titleKey: "collectorInstalledTitle",
+      detailKey: "collectorInstalledDetail",
+      retry: true,
+      install: false,
+    });
+    expect(view.status).toMatchObject({
+      kind: "disconnected",
+      titleKey: "collectorInstalledTitle",
+    });
+  });
+
+  test("冲突和失败保留安装按钮", () => {
+    for (const kind of ["conflict", "failed"] as const) {
+      const model = readyModel();
+      model.setConnection({ connected: false, reason: "not_found" });
+      model.setInstall({ kind });
+      const view = model.getView();
+      expect(placeholder(view)).toMatchObject({
+        titleKey: kind === "conflict" ? "collectorConflictTitle" : "collectorInstallFailedTitle",
+        retry: true,
+        install: true,
+      });
+    }
+  });
+
+  test("连接恢复后清除安装状态", () => {
+    const model = readyModel();
+    model.setConnection({ connected: false, reason: "not_found" });
+    model.setInstall({ kind: "installed" });
+    model.setConnection(connected);
+    expect(model.getView().install).toEqual({ kind: "idle" });
+  });
+
+  test("Collector 不可达时不显示安装按钮", () => {
+    const model = readyModel();
+    model.setConnection({ connected: false, reason: "unreachable" });
+    const view = model.getView();
+    expect(placeholder(view)).toMatchObject({
+      titleKey: "collectorUnreachableTitle",
+      retry: true,
+      install: false,
+    });
   });
 });

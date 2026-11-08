@@ -51,6 +51,7 @@ export function panelView(overrides: Partial<PanelView> = {}): PanelView {
       titleKey: "connectingTitle",
       detailKey: "connectingDetail",
       retry: false,
+      install: false,
     },
     sessionID: null,
     summary: null,
@@ -69,6 +70,7 @@ export function panelView(overrides: Partial<PanelView> = {}): PanelView {
     preview: null,
     focus: { itemId: null, fallback: 0 },
     notice: null,
+    install: { kind: "idle" },
     ...overrides,
   };
 }

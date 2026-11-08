@@ -172,6 +172,8 @@ export interface PanelViewDeps {
   model: PanelModel;
   /** 手动刷新意图；入口把它交给 RefreshController。 */
   onManualRefresh: () => void;
+  /** 安装 Collector 意图；入口把它交给 Service。 */
+  onInstallCollector?: () => void;
   locale?: Locale;
 }
 
@@ -186,7 +188,7 @@ interface CellTarget {
 }
 
 export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
-  const { root, model, onManualRefresh } = deps;
+  const { root, model, onManualRefresh, onInstallCollector = () => {} } = deps;
 
   let currentLocale: Locale = deps.locale ?? "en";
   let view: PanelView = model.getView();
@@ -408,12 +410,25 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
   const placeholderActions = document.createElement("div");
   placeholderActions.className = "placeholder-actions";
   placeholderActions.hidden = true;
-  const placeholderRetry = mountButton(placeholderActions, {
+  const retrySlot = document.createElement("span");
+  retrySlot.className = "placeholder-action";
+  retrySlot.dataset.action = "retry";
+  const installSlot = document.createElement("span");
+  installSlot.className = "placeholder-action";
+  installSlot.dataset.action = "install";
+  const placeholderRetry = mountButton(retrySlot, {
     label: t(currentLocale, "retry"),
     variant: "outline",
     size: "xs",
     onClick: () => onManualRefresh(),
   });
+  const placeholderInstall = mountButton(installSlot, {
+    label: t(currentLocale, "installCollector"),
+    variant: "default",
+    size: "xs",
+    onClick: () => onInstallCollector(),
+  });
+  placeholderActions.append(retrySlot, installSlot);
   placeholder.append(placeholderTitle, placeholderDetail, placeholderActions);
 
   root.append(bannerSlot, versionSlot, usage, mapCard, breakdownCard, placeholder);
@@ -611,7 +626,12 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     });
   }
 
-  function showPlaceholder(headline: string, detail: string, retry = false): void {
+  function showPlaceholder(
+    headline: string,
+    detail: string,
+    retry = false,
+    install = false,
+  ): void {
     usage.hidden = false;
     usageModel.hidden = true;
     usageBadges.hidden = true;
@@ -631,7 +651,9 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
     placeholder.hidden = false;
     placeholderTitle.textContent = headline;
     placeholderDetail.textContent = detail;
-    placeholderActions.hidden = !retry;
+    retrySlot.hidden = !retry;
+    installSlot.hidden = !install;
+    placeholderActions.hidden = !retry && !install;
     syncRetryControls();
   }
 
@@ -647,6 +669,7 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
       t(currentLocale, body.titleKey, body.titleArgs),
       t(currentLocale, body.detailKey, body.detailArgs),
       body.retry,
+      body.install,
     );
   }
 
@@ -1284,12 +1307,20 @@ export function createPanelView(deps: PanelViewDeps): PanelViewHandle {
 
   function syncRetryControls(): void {
     const refresh = view.refresh;
-    const busy = refresh.manualLoading || refresh.inFlight;
+    const installing = view.install.kind === "installing";
+    const busy = refresh.manualLoading || refresh.inFlight || installing;
     refreshButton.update({ disabled: busy, loading: refresh.manualLoading });
     placeholderRetry.update({
       disabled: busy,
       loading: refresh.manualLoading,
       label: refresh.manualLoading ? t(currentLocale, "retrying") : t(currentLocale, "retry"),
+    });
+    placeholderInstall.update({
+      disabled: busy,
+      loading: installing,
+      label: installing
+        ? t(currentLocale, "installingCollector")
+        : t(currentLocale, "installCollector"),
     });
     renderRefreshBanner();
   }

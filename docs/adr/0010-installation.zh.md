@@ -4,7 +4,9 @@ OpenChamber 不会扫描扩展目录来发现扩展。只把目录放进 `~/.con
 
 扩展用软链指向仓库根目录，仓库始终是唯一来源，`git pull` 后重启 OpenChamber 就能生效。Collector 是复制到 `~/.config/opencode/plugins/context-map.js` 的单文件，文件头带 `// @context-map-collector v<版本>` 标记：OpenCode 从插件目录加载文件，复制比软链更接近它实际运行的形态，标记则让安装与卸载能区分本工具生成的文件和用户自己的插件。
 
-写 `extensions.json` 时先解析、校验已知字段的形状，再整体写回，未知字段原样保留；写入用临时文件加 `rename`，权限 0600。`storageIds` 不生成，宿主首次列出扩展时会自己补。安装只接受空目标、指向本仓库的软链、或带标记的 Collector 文件；其它情况一律停止并保留原文件，以非零状态退出。
+第二条路径是在 OpenChamber 中从 Git URL 安装扩展。host 复制扩展包并登记，不执行仓库脚本。这条路径无法创建 Collector，因此由 Service 按面板请求写入；见 [0015](0015-panel-collector-install.zh.md)。两条路径使用同一套标记和冲突规则。
+
+写 `extensions.json` 时先解析、校验已知字段的形状，再整体写回，未知字段原样保留；写入用临时文件加 `rename`，权限 0600。`storageIds` 不生成，宿主首次列出扩展时会自己补。安装脚本只接受空的扩展目标、指向本仓库的软链、或带标记的 Collector 文件；面板接口只接受缺失的 Collector 文件或带标记的文件。其它情况都保留原文件不动；安装脚本以非零状态退出，面板接口返回 409。
 
 **Considered options**
 
@@ -15,4 +17,4 @@ OpenChamber 不会扫描扩展目录来发现扩展。只把目录放进 `~/.con
 
 **Consequences**
 
-仓库必须留在稳定路径，移动或删除仓库会让扩展软链断开。安装与卸载会改写 `extensions.json`，运行中的 OpenChamber 可能同时写同一文件，所以 README 要求在操作前完全退出宿主。宿主升级若改变清单结构，`parseExtensionStore` 的校验会让安装直接失败，而不是写出一份宿主读不懂的文件。
+仓库必须留在稳定路径，移动或删除仓库会让扩展软链断开。链接安装没有这个要求。安装与卸载会改写 `extensions.json`，运行中的 OpenChamber 可能同时写同一文件，所以 README 要求在操作前完全退出宿主。宿主升级若改变清单结构，`parseExtensionStore` 的校验会让安装直接失败，而不是写出一份宿主读不懂的文件。面板路径需要 `service` 授权，并且只写默认的 OpenCode 插件路径。
