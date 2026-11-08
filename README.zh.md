@@ -57,7 +57,7 @@ Context Map 是 OpenChamber 右侧 rail 上的一个面板，展示当前 sessio
 手动安装已在 OpenChamber 2.5.2 和 OpenCode 2.2.2 上验证。它需要 [Bun](https://bun.sh/) 1.3 或更高版本，以及稳定的仓库路径。它会创建软链、把 Collector 复制到 OpenCode 插件目录，并在 `extensions.json` 中登记扩展。
 
 ```bash
-git clone <repository-url> openchamber-context-map
+git clone https://github.com/mel0nyrame/openchamber-context-map.git
 cd openchamber-context-map
 bun run install
 ```

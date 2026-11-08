@@ -57,7 +57,7 @@ This path needs OpenChamber 2.7.0 or newer. The extension includes the Collector
 The manual install is verified on OpenChamber 2.5.2 and OpenCode 2.2.2. It needs [Bun](https://bun.sh/) 1.3 or newer and a stable repository path. It creates a symlink, copies the Collector into the OpenCode plugin directory, and registers the extension in `extensions.json`.
 
 ```bash
-git clone <repository-url> openchamber-context-map
+git clone https://github.com/mel0nyrame/openchamber-context-map.git
 cd openchamber-context-map
 bun run install
 ```
