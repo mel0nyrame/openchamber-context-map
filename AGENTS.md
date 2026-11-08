@@ -20,6 +20,7 @@
 - The installer and the panel's Collector install accept only a missing target or a target this tool generated, and stop on conflict with the original file intact. ADR-0010, ADR-0015
 - When rewriting `extensions.json`, preserve unknown fields. ADR-0010
 - Panel copy lives only in `src/panel/i18n.ts`, and rendering code reads it through `t(locale, key)`; `en` is the source language, `zh` is a translation, and other locales fall back to `en`. ADR-0013
+- Install, upgrade, and uninstall docs: read ADR-0015 and `src/panel/i18n.ts` first; for a feature still in a PR, read that PR's branch. The one-click flow is the panel's **Install Collector** and needs only the **Service** capability.
 - Persistence stores only `SnapshotSummary` (including item heads), not previews; changing its fields requires bumping `SNAPSHOT_SCHEMA_VERSION`, and old files are discarded on a version mismatch. ADR-0014
 - README and ADRs are English, with a `.zh.md` twin (`README.zh.md`, `docs/adr/0001-….zh.md`); change both together. `docs/agents/` is English; other docs under `docs/` are Chinese.
 - When a ticket settles a decision or a convention, add the ADR and update `AGENTS.md` in the same commit.
