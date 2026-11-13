@@ -845,16 +845,25 @@ function close(server) {
 var COLLECTOR_STATE = Symbol.for("openchamber-context-map.collector");
 function collectorState() {
   const holder = globalThis;
-  return holder[COLLECTOR_STATE] ??= { active: null, starting: null };
+  return holder[COLLECTOR_STATE] ??= { active: null, starting: null, closing: null };
 }
-async function ensureCollector(rawContext) {
+async function acquireCollector(rawContext) {
   const state = collectorState();
-  if (state.active)
-    return state.active;
-  state.starting ??= startCollector(rawContext).finally(() => {
-    state.starting = null;
-  });
-  return state.starting;
+  for (;; ) {
+    if (state.closing) {
+      await state.closing.catch(() => {});
+      continue;
+    }
+    if (state.active) {
+      const ticket = {};
+      state.active.open.add(ticket);
+      return { handle: state.active, ticket };
+    }
+    state.starting ??= startCollector(rawContext).finally(() => {
+      state.starting = null;
+    });
+    await state.starting;
+  }
 }
 function makeCleanup(handle, ticket) {
   return async () => {
@@ -867,12 +876,20 @@ async function releaseCollector(handle, ticket) {
   if (handle.open.size > 0)
     return;
   const state = collectorState();
-  handle.shutdown ??= (async () => {
+  if (handle.shutdown)
+    return handle.shutdown;
+  const shutdown = (async () => {
     if (state.active === handle)
       state.active = null;
-    await handle.dispose();
+    try {
+      await handle.dispose();
+    } finally {
+      state.closing = null;
+    }
   })();
-  await handle.shutdown;
+  handle.shutdown = shutdown;
+  state.closing = shutdown;
+  return shutdown;
 }
 async function startCollector(rawContext) {
   const context = rawContext ?? {};
@@ -1010,9 +1027,7 @@ async function startCollector(rawContext) {
 var collector = {
   id: "context-map-collector",
   async setup(rawContext) {
-    const handle = await ensureCollector(rawContext);
-    const ticket = {};
-    handle.open.add(ticket);
+    const { handle, ticket } = await acquireCollector(rawContext);
     return makeCleanup(handle, ticket);
   }
 };

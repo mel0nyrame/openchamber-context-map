@@ -59,6 +59,8 @@ interface CollectorHandle {
 interface CollectorState {
   active: CollectorHandle | null;
   starting: Promise<CollectorHandle> | null;
+  /** 上一个 Collector 正在关闭。关完之前不许启动新的，否则它的 cleanup 会删掉新记录。 */
+  closing: Promise<void> | null;
 }
 
 /**
@@ -69,16 +71,35 @@ const COLLECTOR_STATE = Symbol.for("openchamber-context-map.collector");
 
 function collectorState(): CollectorState {
   const holder = globalThis as unknown as Record<symbol, CollectorState | undefined>;
-  return (holder[COLLECTOR_STATE] ??= { active: null, starting: null });
+  return (holder[COLLECTOR_STATE] ??= { active: null, starting: null, closing: null });
 }
 
-async function ensureCollector(rawContext: unknown): Promise<CollectorHandle> {
+/**
+ * 取一个可用的 Collector，并在同一同步块里加一张票据。
+ *
+ * 票据必须和「handle 仍可用」的检查一起完成：中间只要让出一次事件循环，别的 cleanup 就可能
+ * 关掉服务、删掉 discovery 文件，于是这张票据落在已关闭的句柄上，进程直到重启都没有 Collector。
+ */
+async function acquireCollector(
+  rawContext: unknown,
+): Promise<{ handle: CollectorHandle; ticket: object }> {
   const state = collectorState();
-  if (state.active) return state.active;
-  state.starting ??= startCollector(rawContext).finally(() => {
-    state.starting = null;
-  });
-  return state.starting;
+  for (;;) {
+    if (state.closing) {
+      // 旧 Collector 还在关闭：等它删完自己的记录，再启动新的，避免两次写删交错。
+      await state.closing.catch(() => {});
+      continue;
+    }
+    if (state.active) {
+      const ticket: object = {};
+      state.active.open.add(ticket);
+      return { handle: state.active, ticket };
+    }
+    state.starting ??= startCollector(rawContext).finally(() => {
+      state.starting = null;
+    });
+    await state.starting;
+  }
 }
 
 function makeCleanup(handle: CollectorHandle, ticket: object): () => Promise<void> {
@@ -91,11 +112,19 @@ async function releaseCollector(handle: CollectorHandle, ticket: object): Promis
   if (!handle.open.delete(ticket)) return;
   if (handle.open.size > 0) return;
   const state = collectorState();
-  handle.shutdown ??= (async () => {
+  if (handle.shutdown) return handle.shutdown;
+  const shutdown = (async () => {
     if (state.active === handle) state.active = null;
-    await handle.dispose();
+    try {
+      await handle.dispose();
+    } finally {
+      // 关闭期间不会有别的 Collector 启动（acquireCollector 先等 closing），所以这里清的就是自己。
+      state.closing = null;
+    }
   })();
-  await handle.shutdown;
+  handle.shutdown = shutdown;
+  state.closing = shutdown;
+  return shutdown;
 }
 
 async function startCollector(rawContext: unknown): Promise<CollectorHandle> {
@@ -255,9 +284,7 @@ const collector: CollectorPlugin = {
   id: "context-map-collector",
 
   async setup(rawContext: unknown): Promise<() => Promise<void>> {
-    const handle = await ensureCollector(rawContext);
-    const ticket: object = {};
-    handle.open.add(ticket);
+    const { handle, ticket } = await acquireCollector(rawContext);
     return makeCleanup(handle, ticket);
   },
 };
