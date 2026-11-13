@@ -639,6 +639,71 @@ test("Collector dispose 关闭服务、删除 discovery 文件并释放 hook", a
   await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow();
 });
 
+test("同一进程再次 setup 复用 Collector，旧 cleanup 不删除共享 discovery 文件", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "context-map-reload-"));
+  const first = await startCollectorIn(dir);
+  const cleanupFirst = dispose!;
+  dispose = undefined;
+
+  // 宿主重载插件：同一个 opencode 进程里再次加载。
+  const second = fakeContext();
+  const cleanupSecond = await collector.setup(second.ctx);
+  dispose = cleanupSecond;
+
+  const names = (await readdir(dir)).filter((name) => name.endsWith(".json"));
+  expect(names).toHaveLength(1);
+  const record = JSON.parse(await readFile(join(dir, names[0]!), "utf8")) as {
+    port: number;
+    token: string;
+  };
+
+  await first.fake.fire(baseContext("session-reload"));
+  const summary = await waitForSummary(
+    record.port,
+    record.token,
+    "session-reload",
+    (value) => value.used > 0,
+  );
+  expect(summary.sessionID).toBe("session-reload");
+
+  // 旧实例先退出：仍存活实例的服务与发现文件都必须保留。
+  await cleanupFirst();
+  expect((await readdir(dir)).filter((name) => name.endsWith(".json"))).toEqual(names);
+  expect((await fetch(`http://127.0.0.1:${record.port}/health`)).status).toBe(200);
+  expect(await getSummary(record.port, record.token, "session-reload")).not.toBeNull();
+
+  await cleanupSecond();
+  expect((await readdir(dir)).filter((name) => name.endsWith(".json"))).toHaveLength(0);
+});
+
+test("同一进程的第二个模块实例复用同一个 Collector", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "context-map-instance-"));
+  const first = await startCollectorIn(dir);
+  const cleanupFirst = dispose!;
+  dispose = undefined;
+
+  // 宿主重复加载插件时，同一个进程里会出现第二个模块实例；模块级变量各有一份。
+  const other = (await import(
+    `../src/collector/main.ts?instance=${Date.now()}`
+  )) as typeof import("../src/collector/main.ts");
+  expect(other.default).not.toBe(collector);
+
+  const listener = fakeContext();
+  const cleanupSecond = await other.default.setup(listener.ctx);
+  dispose = cleanupSecond;
+
+  // 第二个实例既不新开端口，也不注册第二个 hook。
+  expect((await readdir(dir)).filter((name) => name.endsWith(".json"))).toHaveLength(1);
+  expect((await fetch(`http://127.0.0.1:${first.port}/health`)).status).toBe(200);
+  await expect(listener.fire(baseContext("session-instance"))).rejects.toThrow("context hook 未注册");
+
+  await cleanupSecond();
+  expect((await fetch(`http://127.0.0.1:${first.port}/health`)).status).toBe(200);
+
+  await cleanupFirst();
+  expect((await readdir(dir)).filter((name) => name.endsWith(".json"))).toHaveLength(0);
+});
+
 test("重启后恢复上一份快照骨架，正文预览返回 404", async () => {
   const dir = await mkdtemp(join(tmpdir(), "context-map-persist-"));
   const first = await startCollectorIn(dir, { models: MODELS, history: { "session-restart": [assistantUsage(1200, 300, 100)] } });

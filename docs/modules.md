@@ -27,7 +27,7 @@ OpenCode 组装请求
 
 | 文件 | 主要导出 | 职责 |
 | --- | --- | --- |
-| `src/collector/main.ts` | 默认导出插件对象 | 注册 `context` hook，接线 store、enrich、persist、resolver；绑定 loopback HTTP 并写 discovery 文件 |
+| `src/collector/main.ts` | 默认导出插件对象 | 进程内单例：`setup()` 加入现有 Collector，最后一张票据释放才关闭；注册 `context` hook，接线 store、enrich、persist、resolver；绑定 loopback HTTP 并写 discovery 文件 |
 | `src/collector/opencode.ts` | `SessionContext`、`SessionMessage`、`ModelRef`、`modelRefID` | OpenCode V2 插件接口的本地类型镜像，避免每个文件重复声明 |
 | `src/collector/snapshot.ts` | `buildDraft`、`baselineDraft`、`finalizeSnapshot`、`PREVIEW_LIMIT`、`HEAD_LIMIT` | 把 `SessionContext` 分成 `CATEGORIES` 里的七类并计数、切片，生成 draft 与最终快照 |
 | `src/collector/store.ts` | `SnapshotStore`、`MAX_SESSIONS` | 内存表：每个 session 只留最后一条，最多 20 个，按访问顺序淘汰 |

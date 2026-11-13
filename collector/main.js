@@ -38,8 +38,24 @@ async function writeDiscovery(dir, record) {
   }
   return file;
 }
-async function removeDiscovery(file) {
+async function removeDiscovery(file, owner) {
+  if (owner) {
+    let current;
+    try {
+      current = JSON.parse(await readFile(file, "utf8"));
+    } catch {
+      return;
+    }
+    if (!sameCollector(current, owner))
+      return;
+  }
   await rm(file, { force: true });
+}
+function sameCollector(value, owner) {
+  if (typeof value !== "object" || value === null)
+    return false;
+  const record = value;
+  return record.pid === owner.pid && record.port === owner.port && record.token === owner.token;
 }
 
 // src/collector/opencode.ts
@@ -826,120 +842,153 @@ function close(server) {
     server.close((error) => error ? reject(error) : resolve());
   });
 }
-var collector = {
-  id: "context-map-collector",
-  async setup(rawContext) {
-    const context = rawContext ?? {};
-    const token = randomBytes(32).toString("hex");
-    const store = new SnapshotStore;
-    const baselines = new BaselineStore;
-    const windows = new WindowResolver(context);
-    const resolver = new SnapshotResolver({
-      store,
-      baselines,
-      loadSession: async (sessionID) => {
-        const get = context.session?.get;
-        if (!get)
-          return null;
-        try {
-          const info = await get.call(context.session, { sessionID });
-          return info ?? null;
-        } catch {
-          return null;
-        }
-      },
-      resolveWindow: (ref) => windows.resolve(ref)
-    });
-    const persistDir = persistenceEnabled() ? resolveSnapshotDir() : null;
-    const writer = new SnapshotWriter(persistDir);
-    if (persistDir) {
-      for (const summary of await readSnapshots(persistDir).catch(() => [])) {
-        store.restore(summary);
-      }
-    }
-    const hook = context.session?.hook ? await context.session.hook("context", (sessionContext) => {
-      const draft = buildDraft(sessionContext, new Date().toISOString());
-      if (typeof sessionContext.agent === "string" && sessionContext.agent) {
-        baselines.remember(sessionContext.agent, baselineDraft(draft));
-      }
-      const record = store.add(draft);
-      enrichSnapshot(context, store, windows, record).then((summary) => {
-        if (summary)
-          writer.schedule(summary);
-      }).catch(() => {});
-    }) : null;
-    const server = createServer(async (request, response) => {
+var COLLECTOR_STATE = Symbol.for("openchamber-context-map.collector");
+function collectorState() {
+  const holder = globalThis;
+  return holder[COLLECTOR_STATE] ??= { active: null, starting: null };
+}
+async function ensureCollector(rawContext) {
+  const state = collectorState();
+  if (state.active)
+    return state.active;
+  state.starting ??= startCollector(rawContext).finally(() => {
+    state.starting = null;
+  });
+  return state.starting;
+}
+function makeCleanup(handle, ticket) {
+  return async () => {
+    await releaseCollector(handle, ticket);
+  };
+}
+async function releaseCollector(handle, ticket) {
+  if (!handle.open.delete(ticket))
+    return;
+  if (handle.open.size > 0)
+    return;
+  const state = collectorState();
+  handle.shutdown ??= (async () => {
+    if (state.active === handle)
+      state.active = null;
+    await handle.dispose();
+  })();
+  await handle.shutdown;
+}
+async function startCollector(rawContext) {
+  const context = rawContext ?? {};
+  const token = randomBytes(32).toString("hex");
+  const store = new SnapshotStore;
+  const baselines = new BaselineStore;
+  const windows = new WindowResolver(context);
+  const resolver = new SnapshotResolver({
+    store,
+    baselines,
+    loadSession: async (sessionID) => {
+      const get = context.session?.get;
+      if (!get)
+        return null;
       try {
-        const url = new URL(request.url ?? "/", "http://127.0.0.1");
-        const path = url.pathname;
-        if (request.method === "GET" && path === "/health") {
-          sendJson(response, 200, { ok: true, version: COLLECTOR_VERSION });
+        const info = await get.call(context.session, { sessionID });
+        return info ?? null;
+      } catch {
+        return null;
+      }
+    },
+    resolveWindow: (ref) => windows.resolve(ref)
+  });
+  const persistDir = persistenceEnabled() ? resolveSnapshotDir() : null;
+  const writer = new SnapshotWriter(persistDir);
+  if (persistDir) {
+    for (const summary of await readSnapshots(persistDir).catch(() => [])) {
+      store.restore(summary);
+    }
+  }
+  const hook = context.session?.hook ? await context.session.hook("context", (sessionContext) => {
+    const draft = buildDraft(sessionContext, new Date().toISOString());
+    if (typeof sessionContext.agent === "string" && sessionContext.agent) {
+      baselines.remember(sessionContext.agent, baselineDraft(draft));
+    }
+    const record = store.add(draft);
+    enrichSnapshot(context, store, windows, record).then((summary) => {
+      if (summary)
+        writer.schedule(summary);
+    }).catch(() => {});
+  }) : null;
+  const server = createServer(async (request, response) => {
+    try {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      const path = url.pathname;
+      if (request.method === "GET" && path === "/health") {
+        sendJson(response, 200, { ok: true, version: COLLECTOR_VERSION });
+        return;
+      }
+      if (request.method === "GET" && (path === "/summary" || path === "/item")) {
+        if (request.headers.authorization !== `Bearer ${token}`) {
+          sendJson(response, 401, { error: "unauthorized" });
           return;
         }
-        if (request.method === "GET" && (path === "/summary" || path === "/item")) {
-          if (request.headers.authorization !== `Bearer ${token}`) {
-            sendJson(response, 401, { error: "unauthorized" });
-            return;
-          }
-          const sessionID = url.searchParams.get("sessionID");
-          if (!sessionID) {
-            sendJson(response, 400, { error: "bad_request" });
-            return;
-          }
-          const itemId = path === "/item" ? url.searchParams.get("itemId") : null;
-          if (path === "/item" && !itemId) {
-            sendJson(response, 400, { error: "bad_request" });
-            return;
-          }
-          if (path === "/summary") {
-            const summary = await resolver.resolveSummary(sessionID);
-            if (!summary) {
-              sendJson(response, 404, { error: "not_found" });
-              return;
-            }
-            sendJson(response, 200, summary);
-            return;
-          }
-          const detail = await resolver.resolveItem(sessionID, itemId ?? "");
-          if (!detail) {
+        const sessionID = url.searchParams.get("sessionID");
+        if (!sessionID) {
+          sendJson(response, 400, { error: "bad_request" });
+          return;
+        }
+        const itemId = path === "/item" ? url.searchParams.get("itemId") : null;
+        if (path === "/item" && !itemId) {
+          sendJson(response, 400, { error: "bad_request" });
+          return;
+        }
+        if (path === "/summary") {
+          const summary = await resolver.resolveSummary(sessionID);
+          if (!summary) {
             sendJson(response, 404, { error: "not_found" });
             return;
           }
-          sendJson(response, 200, detail);
+          sendJson(response, 200, summary);
           return;
         }
-        sendJson(response, 404, { error: "not_found" });
-      } catch {
-        if (!response.headersSent) {
-          sendJson(response, 500, { error: "internal" });
-        } else {
-          response.end();
+        const detail = await resolver.resolveItem(sessionID, itemId ?? "");
+        if (!detail) {
+          sendJson(response, 404, { error: "not_found" });
+          return;
         }
+        sendJson(response, 200, detail);
+        return;
       }
-    });
-    let port;
-    try {
-      port = await listen(server);
-    } catch (error) {
-      await hook?.dispose();
-      throw error;
+      sendJson(response, 404, { error: "not_found" });
+    } catch {
+      if (!response.headersSent) {
+        sendJson(response, 500, { error: "internal" });
+      } else {
+        response.end();
+      }
     }
-    const record = {
-      version: COLLECTOR_VERSION,
-      port,
-      token,
-      pid: process.pid,
-      startedAt: new Date().toISOString()
-    };
-    let discoveryFile;
-    try {
-      discoveryFile = await writeDiscovery(resolveDiscoveryDir(), record);
-    } catch (error) {
-      await hook?.dispose();
-      await close(server);
-      throw error;
-    }
-    return async () => {
+  });
+  let port;
+  try {
+    port = await listen(server);
+  } catch (error) {
+    await hook?.dispose();
+    throw error;
+  }
+  const record = {
+    version: COLLECTOR_VERSION,
+    port,
+    token,
+    pid: process.pid,
+    startedAt: new Date().toISOString()
+  };
+  let discoveryFile;
+  try {
+    discoveryFile = await writeDiscovery(resolveDiscoveryDir(), record);
+  } catch (error) {
+    await hook?.dispose();
+    await close(server);
+    throw error;
+  }
+  const handle = {
+    open: new Set,
+    shutdown: null,
+    dispose: async () => {
       try {
         await hook?.dispose();
       } finally {
@@ -949,11 +998,22 @@ var collector = {
           try {
             await writer.dispose();
           } finally {
-            await removeDiscovery(discoveryFile);
+            await removeDiscovery(discoveryFile, record);
           }
         }
       }
-    };
+    }
+  };
+  collectorState().active = handle;
+  return handle;
+}
+var collector = {
+  id: "context-map-collector",
+  async setup(rawContext) {
+    const handle = await ensureCollector(rawContext);
+    const ticket = {};
+    handle.open.add(ticket);
+    return makeCleanup(handle, ticket);
   }
 };
 var main_default = collector;
