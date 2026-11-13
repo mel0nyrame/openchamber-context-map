@@ -36,8 +36,25 @@ export async function writeDiscovery(dir: string, record: DiscoveryRecord): Prom
   return file;
 }
 
-export async function removeDiscovery(file: string): Promise<void> {
+export async function removeDiscovery(file: string, owner?: DiscoveryRecord): Promise<void> {
+  if (owner) {
+    let current: unknown;
+    try {
+      current = JSON.parse(await readFile(file, "utf8"));
+    } catch {
+      // 文件已不存在或无法解析：没有可删的记录。
+      return;
+    }
+    if (!sameCollector(current, owner)) return;
+  }
   await rm(file, { force: true });
+}
+
+/** 记录是否仍描述同一个 Collector 实例（同一进程、同一端口、同一 token）。 */
+function sameCollector(value: unknown, owner: DiscoveryRecord): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.pid === owner.pid && record.port === owner.port && record.token === owner.token;
 }
 
 function isDiscoveryRecord(value: unknown): value is DiscoveryRecord {

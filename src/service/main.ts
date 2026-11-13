@@ -181,7 +181,8 @@ async function resolveRoute(): Promise<ResolvedRoute> {
       continue;
     }
     try {
-      await removeDiscovery(item.entry.file);
+      // 只删刚探测过的记录：探活期间同进程的新实例可能已重写该文件。
+      await removeDiscovery(item.entry.file, item.entry.record);
     } catch {
       undeleted = true;
     }

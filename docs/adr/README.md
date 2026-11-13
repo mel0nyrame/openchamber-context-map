@@ -19,5 +19,6 @@ Each record states one decision, the options it rejected, and what follows from 
 | [0013](0013-panel-localization.md) | English is the source language; other locales fall back to it | `src/panel/i18n.ts` | Active |
 | [0014](0014-snapshot-persistence.md) | Persist snapshots to the state directory | `src/collector/persist.ts`, `src/shared/snapshot.ts` | Active |
 | [0015](0015-panel-collector-install.md) | Install a missing Collector from the panel | `src/service/main.ts`, `src/panel/model.ts`, `src/panel/view.ts`, `src/shared/collector-file.ts` | Active |
+| [0016](0016-collector-singleton.md) | One Collector per process; delete only your own discovery record | `src/collector/main.ts`, `src/shared/discovery.ts`, `src/service/main.ts` | Active |
 
 Chinese translations sit next to each record with a `.zh.md` suffix.

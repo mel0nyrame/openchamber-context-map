@@ -58,8 +58,24 @@ function resolveDiscoveryDir(env = process.env) {
     return override;
   return join2(homedir(), ".local", "state", "openchamber-context-map", "collectors");
 }
-async function removeDiscovery(file) {
+async function removeDiscovery(file, owner) {
+  if (owner) {
+    let current;
+    try {
+      current = JSON.parse(await readFile(file, "utf8"));
+    } catch {
+      return;
+    }
+    if (!sameCollector(current, owner))
+      return;
+  }
   await rm(file, { force: true });
+}
+function sameCollector(value, owner) {
+  if (typeof value !== "object" || value === null)
+    return false;
+  const record = value;
+  return record.pid === owner.pid && record.port === owner.port && record.token === owner.token;
 }
 function isDiscoveryRecord(value) {
   if (typeof value !== "object" || value === null)
@@ -215,7 +231,7 @@ async function resolveRoute() {
       continue;
     }
     try {
-      await removeDiscovery(item.entry.file);
+      await removeDiscovery(item.entry.file, item.entry.record);
     } catch {
       undeleted = true;
     }
